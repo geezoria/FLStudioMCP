@@ -9,36 +9,31 @@ fLMCP Bridge — the FL Studio side of the fl-studio-mcp Model Context Protocol 
 How it works
 ------------
 This script runs inside FL Studio as a "MIDI device" (no real hardware needed — it's
-loaded by configuring a virtual/loopback MIDI port or by any MIDI input that FL can
-see). On OnInit() it starts a TCP server on 127.0.0.1:9876 in a daemon thread that
-receives length-prefixed JSON-RPC requests from the fl-studio-mcp server.
+loaded by binding it to any MIDI input row, e.g. a loopMIDI loopback port; no MIDI
+bytes actually flow). FL Studio 2025 runs controller scripts in a Python
+sub-interpreter where `threading`, `_socket` and `os.remove` / `os.replace` are
+unusable (the underlying C calls return NULL). So instead of a TCP server, the
+bridge exchanges plain JSON files with the MCP server and processes commands from
+`OnIdle`, which FL calls on its main thread several times per second:
 
-Requests are placed in a thread-safe queue. FL Studio's main thread calls OnIdle()
-several times per second; each OnIdle call drains the queue and executes the pending
-FL API calls on the main thread (FL's Python API is not thread-safe, so we MUST
-execute there), then pushes responses back through the socket.
+  * MCP server writes  <script dir>/mcp_command.json   = {"id": N, "action": ..., "params": {...}}
+    with N strictly increasing (timestamp-based, survives server restarts).
+  * `OnIdle` reads it; if `id` > last-processed id, it runs the action on FL's main
+    thread (FL's Python API is single-threaded) and overwrites
+    <script dir>/mcp_response.json = {"id": N, "ok": bool, "result"/"error": ...}.
+  * The command file is never deleted by FL — the server just overwrites it for the
+    next call and pre-deletes the response file.
+  * `OnIdle` also touches <script dir>/mcp_heartbeat.txt every ~60 ticks so the
+    server can tell whether FL is alive.
 
-Piano-roll edits are deferred: we stage them into `piano_roll_requests.json` inside
-this script's directory, and the fl-studio-mcp server is responsible for opening the
-piano-roll window and triggering the companion `ComposeWithLLM.pyscript` via
-Ctrl+Alt+Y. After the pyscript runs, it writes `piano_roll_state.json` which the
-MCP server reads back.
-
-Protocol
---------
-Frame: [4-byte big-endian uint32 length][payload = utf-8 JSON]
-Request:      {"id": int, "action": str, "params": {...}}
-Response:     {"id": int, "ok": bool, "result": ..., "error": str|None}
-Notification: {"event": str, "data": ...}   (server push, no id)
+Piano-roll edits use a separate path: the MCP server stages them into
+`fLMCP_request.json` and triggers the companion `ComposeWithLLM.pyscript` via
+Ctrl+Alt+Y; that pyscript writes `fLMCP_state.json` back.
 """
 
 import json
 import os
-import queue
-import socket
-import struct
 import sys
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -61,11 +56,7 @@ import ui
 # Configuration
 # ----------------------------------------------------------------------------
 
-BRIDGE_HOST = "127.0.0.1"
-BRIDGE_PORT = 9876
-HEADER = struct.Struct(">I")
-MAX_FRAME = 16 * 1024 * 1024
-BRIDGE_VERSION = "0.1.0"
+BRIDGE_VERSION = "0.2.0-filebridge"
 
 
 def _script_dir():
@@ -89,51 +80,29 @@ PR_STATE = Path(SCRIPT_DIR).parent.parent / PIANO_ROLL_DIR_NAME / "fLMCP_state.j
 # Global state
 # ----------------------------------------------------------------------------
 
-_inbox: "queue.Queue[tuple[socket.socket, dict]]" = queue.Queue()
-_server_thread = None
-_accept_socket = None
-_client_lock = threading.Lock()
 _started_at = time.monotonic()
 _idle_tick = 0
-_last_refresh_push = 0.0
-_known_clients = set()  # live client sockets for push notifications
 
 
 # ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
 
+_LOG_FILE = os.path.join(str(SCRIPT_DIR), "fLMCP_log.txt")
+
+
 def _log(msg):
+    """Print + append to fLMCP_log.txt next to this script (FL has no script console)."""
+    line = "[fLMCP] " + str(msg)
     try:
-        print("[fLMCP] " + msg)
+        print(line)
     except Exception:
         pass
-
-
-def _pack_frame(obj):
-    body = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    if len(body) > MAX_FRAME:
-        raise ValueError("frame too large: %d" % len(body))
-    return HEADER.pack(len(body)) + body
-
-
-def _recv_exact(sock, n):
-    buf = bytearray()
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("socket closed")
-        buf.extend(chunk)
-    return bytes(buf)
-
-
-def _read_frame(sock):
-    head = _recv_exact(sock, HEADER.size)
-    (length,) = HEADER.unpack(head)
-    if length > MAX_FRAME:
-        raise ValueError("frame length out of bounds: %d" % length)
-    body = _recv_exact(sock, length)
-    return json.loads(body.decode("utf-8"))
+    try:
+        with open(_LOG_FILE, "a", encoding="utf-8") as _f:
+            _f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def _color_to_int(color):
@@ -178,56 +147,68 @@ def _safe(fn, *a, **kw):
 
 
 # ----------------------------------------------------------------------------
-# Server thread
+# File-based transport
+#
+# FL Studio 2025 runs controller scripts in a Python sub-interpreter where
+# `threading`, `_socket` AND `os.remove` / `os.replace` are unusable
+# (start_new_thread / _socket.socket / os.remove all return NULL).  So instead
+# of a TCP server we poll a command file from OnIdle (which runs on FL's main
+# thread) and write a response file back — and we can ONLY do plain
+# `open(...).read()` / `open(...,'w').write()`, no deletes, no renames.
+#
+# Protocol:
+#   MCP server writes   <SCRIPT_DIR>/mcp_command.json   ({"id": N, ...}, N strictly increasing)
+#   FL OnIdle reads it; if id > last-processed id -> run the action on FL's
+#   main thread, then overwrite <SCRIPT_DIR>/mcp_response.json with {"id": N, ...}.
+#   The command file is never deleted by FL; the server just overwrites it
+#   (and pre-deletes the response file) for the next call.
 # ----------------------------------------------------------------------------
 
-def _serve_client(client):
-    _known_clients.add(client)
-    try:
-        while True:
-            try:
-                req = _read_frame(client)
-            except (ConnectionError, OSError):
-                return
-            except Exception as e:
-                try:
-                    err = {"id": 0, "ok": False, "error": "frame_error: %s" % e}
-                    client.sendall(_pack_frame(err))
-                except Exception:
-                    return
-                return
-            # hand off to the FL main thread via queue
-            _inbox.put((client, req))
-    finally:
-        _known_clients.discard(client)
-        try:
-            client.close()
-        except Exception:
-            pass
+CMD_FILE = os.path.join(str(SCRIPT_DIR), "mcp_command.json")
+RESP_FILE = os.path.join(str(SCRIPT_DIR), "mcp_response.json")
+HEARTBEAT_FILE = os.path.join(str(SCRIPT_DIR), "mcp_heartbeat.txt")
+
+_last_cmd_id = [0]
 
 
-def _server_loop():
-    global _accept_socket
+def _write_response(resp):
     try:
-        _accept_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _accept_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        _accept_socket.bind((BRIDGE_HOST, BRIDGE_PORT))
-        _accept_socket.listen(4)
-        _log("TCP server listening on %s:%d" % (BRIDGE_HOST, BRIDGE_PORT))
+        with open(RESP_FILE, "w", encoding="utf-8") as f:
+            json.dump(resp, f, ensure_ascii=False)
+            f.flush()
     except Exception as e:
-        _log("failed to bind bridge port: %s" % e)
-        _accept_socket = None
-        return
+        _log("failed to write response file: %s" % e)
 
-    while True:
-        try:
-            conn, addr = _accept_socket.accept()
-            conn.settimeout(60.0)
-            t = threading.Thread(target=_serve_client, args=(conn,), daemon=True)
-            t.start()
-        except Exception as e:
-            _log("accept error: %s" % e)
-            time.sleep(0.5)
+
+def _poll_command_file():
+    try:
+        if not os.path.exists(CMD_FILE):
+            return
+        with open(CMD_FILE, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except Exception:
+        return
+    if not raw or not raw.strip():
+        return
+    try:
+        req = json.loads(raw)
+    except Exception:
+        return  # likely a half-written file; the server retries / overwrites
+    req_id = req.get("id", 0)
+    if not isinstance(req_id, int) or req_id <= _last_cmd_id[0]:
+        return  # already processed (or stale)
+    _last_cmd_id[0] = req_id
+    action = req.get("action", "")
+    params = req.get("params", {}) or {}
+    try:
+        result = _execute(action, params)
+        resp = {"id": req_id, "ok": True, "result": result}
+    except Exception as e:
+        resp = {"id": req_id, "ok": False,
+                "error": "%s: %s" % (type(e).__name__, e),
+                "traceback": traceback.format_exc(limit=3)}
+        _log("action %s error: %s" % (action, e))
+    _write_response(resp)
 
 
 # ----------------------------------------------------------------------------
@@ -261,8 +242,11 @@ def h_meta_info(_):
         "api_modules": ["transport","mixer","channels","patterns","playlist",
                         "plugins","arrangement","ui","general","device","midi"],
         "script_dir": str(SCRIPT_DIR),
-        "tcp_host": BRIDGE_HOST,
-        "tcp_port": BRIDGE_PORT,
+        "transport": "file-bridge",
+        "command_file": CMD_FILE,
+        "response_file": RESP_FILE,
+        "heartbeat_file": HEARTBEAT_FILE,
+        "idle_ticks": _idle_tick,
     }
 
 
@@ -1648,77 +1632,48 @@ _HANDLERS = {
 # ----------------------------------------------------------------------------
 
 def OnInit():
-    global _server_thread
     _log("initializing — script dir: %s" % SCRIPT_DIR)
     _log("FL version: %s" % _safe(general.getVersion))
-    if _server_thread is None or not _server_thread.is_alive():
-        _server_thread = threading.Thread(target=_server_loop, daemon=True, name="fLMCP-TCP")
-        _server_thread.start()
-    _log("bridge ready on tcp://%s:%d" % (BRIDGE_HOST, BRIDGE_PORT))
+    # file-bridge mode: no threads / sockets / file deletes work in FL's
+    # sub-interpreter — we only read & overwrite plain files.
+    # Treat any pre-existing command as already processed so we don't replay it.
+    try:
+        if os.path.exists(CMD_FILE):
+            with open(CMD_FILE, "r", encoding="utf-8") as f:
+                old = json.loads(f.read() or "{}")
+            if isinstance(old.get("id"), int):
+                _last_cmd_id[0] = old["id"]
+    except Exception:
+        pass
+    # stale response from a previous session: overwrite with a neutral marker
+    try:
+        with open(RESP_FILE, "w", encoding="utf-8") as f:
+            json.dump({"id": 0, "ok": False, "error": "stale (bridge just (re)loaded)"}, f)
+    except Exception:
+        pass
+    _log("file-bridge ready (last_cmd_id=%d) — polling %s from OnIdle" % (_last_cmd_id[0], CMD_FILE))
 
 
 def OnDeInit():
-    global _accept_socket
     _log("deinit")
-    if _accept_socket is not None:
-        try:
-            _accept_socket.close()
-        except Exception:
-            pass
-        _accept_socket = None
-    # close client connections
-    for c in list(_known_clients):
-        try:
-            c.close()
-        except Exception:
-            pass
-    _known_clients.clear()
+    # nothing to clean up — file deletes don't work here and the server
+    # tolerates stale files via id matching.
 
 
 def OnIdle():
-    """Drain up to N requests per idle tick on the FL main thread."""
-    global _idle_tick, _last_refresh_push
+    """Runs on FL's main thread several times/sec. Poll the command file."""
+    global _idle_tick
     _idle_tick += 1
-    drained = 0
-    while drained < 32:
+    if _idle_tick % 60 == 0:
         try:
-            client, req = _inbox.get_nowait()
-        except queue.Empty:
-            break
-        drained += 1
-        req_id = req.get("id", 0)
-        action = req.get("action", "")
-        params = req.get("params", {}) or {}
-        try:
-            result = _execute(action, params)
-            resp = {"id": req_id, "ok": True, "result": result}
-        except Exception as e:
-            tb = traceback.format_exc(limit=3)
-            resp = {"id": req_id, "ok": False, "error": "%s: %s" % (type(e).__name__, e), "traceback": tb}
-            _log("action %s error: %s" % (action, e))
-        try:
-            client.sendall(_pack_frame(resp))
-        except Exception as e:
-            _log("failed to send response: %s" % e)
-
-    # push transport notifications every ~0.5s when playing
-    now = time.monotonic()
-    if _known_clients and (now - _last_refresh_push) > 0.5:
-        _last_refresh_push = now
-        try:
-            snap = h_transport_status({})
-            frame = _pack_frame({"event": "transport.tick", "data": snap})
-            for c in list(_known_clients):
-                try:
-                    c.sendall(frame)
-                except Exception:
-                    _known_clients.discard(c)
+            with open(HEARTBEAT_FILE, "w", encoding="utf-8") as f:
+                f.write("%d %.1f" % (_idle_tick, time.monotonic() - _started_at))
         except Exception:
             pass
+    _poll_command_file()
 
 
 def OnMidiIn(event):
-    # We don't need MIDI for the primary channel; just ignore.
     event.handled = False
 
 
@@ -1727,25 +1682,8 @@ def OnMidiMsg(event):
 
 
 def OnRefresh(flags):
-    # push a refresh event to connected clients (so MCP server can invalidate cache)
-    try:
-        frame = _pack_frame({"event": "refresh", "data": {"flags": int(flags)}})
-        for c in list(_known_clients):
-            try:
-                c.sendall(frame)
-            except Exception:
-                _known_clients.discard(c)
-    except Exception:
-        pass
+    pass
 
 
 def OnProjectLoad(status):
-    try:
-        frame = _pack_frame({"event": "projectLoad", "data": {"status": status}})
-        for c in list(_known_clients):
-            try:
-                c.sendall(frame)
-            except Exception:
-                _known_clients.discard(c)
-    except Exception:
-        pass
+    pass
