@@ -21,6 +21,11 @@ def register(mcp: FastMCP) -> None:
         return get_client().call("mixer.trackInfo", track=track)
 
     @mcp.tool()
+    def mixer_get_peaks(track: int) -> dict:
+        """Read live normalized left/right VU peaks for a mixer track."""
+        return get_client().call("mixer.peaks", track=track)
+
+    @mcp.tool()
     def mixer_all_tracks(include_empty: bool = False) -> dict:
         """List of all mixer tracks."""
         return get_client().call("mixer.allTracks", include_empty=include_empty)

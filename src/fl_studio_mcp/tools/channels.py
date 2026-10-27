@@ -76,8 +76,8 @@ def register(mcp: FastMCP) -> None:
         return get_client().call("channels.routeToMixer", index=index, mixer_track=mixer_track)
 
     @mcp.tool()
-    def channel_trigger_note(index: int, note: int, velocity: int = 100, duration_ms: int = 0) -> dict:
-        """Trigger a one-shot MIDI note on the channel (live preview, not recorded)."""
+    def channel_trigger_note(index: int, note: int, velocity: int = 100, duration_ms: int = 250) -> dict:
+        """Trigger a preview note and schedule note-off (duration defaults to 250 ms)."""
         return get_client().call("channels.triggerNote",
                                  index=index, note=note, velocity=velocity, duration_ms=duration_ms)
 

@@ -37,6 +37,48 @@ def test_append_request_accumulates(monkeypatch, tmp_path):
     assert [a["action"] for a in data] == ["clear", "add_notes"]
 
 
+def test_stage_and_run_bootstraps_compose_when_hotkey_has_no_state(monkeypatch, tmp_path):
+    from fl_studio_mcp import keystroke
+
+    script = tmp_path / "ComposeWithLLM.pyscript"
+    script.write_text("# fixture", encoding="utf-8")
+    monkeypatch.setattr(file_bridge, "PR_DIR", tmp_path)
+    monkeypatch.setattr(file_bridge, "REQUEST_FILE", tmp_path / "fLMCP_request.json")
+    monkeypatch.setattr(file_bridge, "STATE_FILE", tmp_path / "fLMCP_state.json")
+    monkeypatch.setattr(file_bridge.sys, "platform", "win32")
+    monkeypatch.setattr(keystroke, "send_hotkey_windows", lambda: False)
+    monkeypatch.setattr(file_bridge, "wait_for_state", lambda _timeout: {"noteCount": 0})
+    monkeypatch.setattr(keystroke, "select_compose_script_windows", lambda: True)
+
+    result = file_bridge.stage_and_run([{"action": "export_only"}], wait_sec=1)
+
+    assert result["ok"] is True
+    assert result["hotkey_sent"] is False
+    assert result["script_bootstrapped"] is True
+
+
+def test_stage_and_run_skips_bootstrap_when_hotkey_returns_state(monkeypatch, tmp_path):
+    from fl_studio_mcp import keystroke
+
+    script = tmp_path / "ComposeWithLLM.pyscript"
+    script.write_text("# fixture", encoding="utf-8")
+    monkeypatch.setattr(file_bridge, "PR_DIR", tmp_path)
+    monkeypatch.setattr(file_bridge, "REQUEST_FILE", tmp_path / "fLMCP_request.json")
+    monkeypatch.setattr(file_bridge, "STATE_FILE", tmp_path / "fLMCP_state.json")
+    monkeypatch.setattr(keystroke, "send_hotkey_windows", lambda: True)
+    monkeypatch.setattr(file_bridge, "wait_for_state", lambda _timeout: {"noteCount": 0})
+    monkeypatch.setattr(
+        keystroke,
+        "select_compose_script_windows",
+        lambda: (_ for _ in ()).throw(AssertionError("bootstrap should not run")),
+    )
+
+    result = file_bridge.stage_and_run([{"action": "export_only"}], wait_sec=1)
+
+    assert result["ok"] is True
+    assert result["script_bootstrapped"] is False
+
+
 def test_keystroke_delegates_to_file_bridge():
     # keystroke.py should no longer own its own copy of the paths.
     from fl_studio_mcp import keystroke

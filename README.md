@@ -33,16 +33,18 @@ Built from scratch to improve on three earlier community attempts
 | **Audio-file analysis** (tempo / key / onsets / melody) | ❌ | ❌ | ❌ | ✅ |
 | **MP3 → DnB flip** one-shot | ❌ | ❌ | ❌ | ✅ |
 | **Dear PyGui voice GUI** | ❌ | ❌ | ❌ | ✅ |
-| Transport: TCP (no loopMIDI required to run) | ❌ (MIDI + JSON-poll) | ❌ (MIDI) | ❌ (MIDI) | ✅ |
-| Push notifications (transport tick / refresh / project load) | ❌ | ❌ | ❌ | ✅ |
+| Transport: atomic JSON + MIDI wake | ❌ (MIDI + JSON-poll) | ❌ (MIDI) | ❌ (MIDI) | ✅ |
+| FL 2025 sub-interpreter compatible (no background threads) | ❌ | ❌ | ❌ | ✅ |
 | PowerShell installer for Windows | ❌ | ❌ | ❌ | ✅ |
-| Tool count | ≈ 60 | ≈ 14 | ≈ 5 | **159** |
+| Tool count | ≈ 60 | ≈ 14 | ≈ 5 | **165** |
 
 ## Highlights
 
-- **No loopMIDI dance.** FL Studio 2025 ships Python 3.12 with `_socket.pyd`,
-  so the bridge opens a tiny TCP server inside FL (`127.0.0.1:9876`). No
-  virtual-MIDI port, no 7-bit byte encoding, true bidirectional streaming.
+- **FL Studio 2025 compatible transport.** FL 2025 runs controller scripts in
+  a Python 3.12 sub-interpreter where starting threads fails. fLMCP therefore
+  exchanges full JSON payloads through atomic files and uses one reserved
+  loopMIDI CC only to wake `OnMidiMsg`; all FL API calls remain on FL's main
+  thread and no payload is squeezed through MIDI.
 - **Piano-roll editing that actually works.** FL's `flpianoroll` module is
   sandboxed to piano-roll scripts; fLMCP stages edits to a JSON file, then
   fires the companion pyscript via a synthesised `Ctrl+Alt+Y` so the notes
@@ -59,8 +61,9 @@ Built from scratch to improve on three earlier community attempts
 - **Audio-file analysis.** Drop any MP3 / WAV / FLAC / OGG on it — get back
   tempo, detected key, onsets, and (optionally) the dominant melody
   transcribed into FL's piano roll.
-- **Push events.** `transport.tick`, `refresh`, `projectLoad` are streamed
-  back so Claude can react to what the user is doing in FL without polling.
+- **Live production feedback.** Read per-track left/right mixer peaks, inspect
+  channel types and window visibility/focus, and control punch, overdub, loop
+  recording and marker jumps without leaving the MCP session.
 
 ## Architecture
 
@@ -70,15 +73,15 @@ Built from scratch to improve on three earlier community attempts
 +---------------------+                  |  Python server       |
                                          +-----------+----------+
                                                      |
-                                         length-prefixed JSON
-                                         over TCP (127.0.0.1:9876)
+                                         atomic request/response JSON
+                                         + loopMIDI wake CC 119 / ch. 16
                                                      |
   +------------------------------------  FL Studio 2025  -----------------+
   |                                                                      |
   |  [ Hardware/fLMCP Bridge/device_FLStudioMCP.py ]                      |
-  |    OnInit()     -> threading.Thread -> socket.accept loop             |
-  |    OnIdle()     -> drains queue, executes FL API on main thread       |
-  |    OnRefresh()  / OnProjectLoad() -> push notifications to MCP        |
+  |    OnInit()     -> records the last request id (no threads)            |
+  |    OnMidiMsg()  -> reads request, executes FL API, writes response     |
+  |    OnIdle()     -> optional polling fallback on versions that emit it  |
   |                                                                      |
   |  [ Piano roll scripts/ComposeWithLLM.pyscript ]                       |
   |    Triggered by Ctrl+Alt+Y (SendInput from MCP server):               |
@@ -89,12 +92,15 @@ Built from scratch to improve on three earlier community attempts
 
 Deeper dive in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-### Why TCP and not MIDI
+### Why files plus a MIDI wake-up
 
-The earlier projects all relied on loopMIDI plus 7-bit byte encoding, which is
-painful and fragile. FL Studio 2025 ships Python 3.12 with `_socket.pyd`, so
-the bridge simply opens a local TCP server inside FL. No extra driver, no 7-bit
-limit, true bidirectional streaming, free push notifications.
+FL Studio 2025's Python 3.12 controller-script sub-interpreter rejects both
+daemon and non-daemon threads, so a background TCP listener cannot run there.
+The MCP process atomically replaces `mcp_command.json`, then sends CC 119 with
+value 1 on MIDI channel 16 to `loopMIDI Port`. FL delivers that byte to
+`OnMidiMsg`, which reads the full JSON, executes the existing handler on FL's
+main thread, and writes `mcp_response.json`. `OnIdle` remains a fallback for FL
+versions that emit it. MIDI carries only the wake-up, never the RPC payload.
 
 ### Why a separate piano-roll pyscript
 
@@ -111,9 +117,11 @@ Requirements:
 - Windows 10 / 11
 - FL Studio 2025 (Producer Edition or higher — needs MIDI scripting)
 - Python 3.10+ on `PATH` (used once to create the bundled venv)
+- [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) with a port
+  named `loopMIDI Port`
 
 ```powershell
-git clone https://github.com/geezoria/FLStudioMCP.git fLMCP
+git clone https://github.com/marcostolosa/FLStudioMCP.git fLMCP
 cd fLMCP
 ./scripts/install_windows.ps1
 ```
@@ -133,18 +141,16 @@ What the installer does:
 ### FL Studio-side activation
 
 1. Launch FL Studio 2025.
-2. `Options > MIDI Settings > Input`: pick **any** row (even a device you
-   don't use) and set **Controller type** = `fLMCP Bridge`, then click *Enable*.
-   - If you don't own a MIDI device at all, install
-     [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html), create
-     a port called `fLMCP loop`, and bind that row. The bridge just needs *any*
-     input line wired so FL loads the script — no MIDI bytes actually flow.
-3. Open FL's script output (`Options > MIDI > View script output`) and look
-   for `[fLMCP] TCP server listening on 127.0.0.1:9876`.
-4. Open any piano roll, click the scripts dropdown (top-right), and pick
-   **ComposeWithLLM** as the active script. This binds `Ctrl+Alt+Y` to our
-   pyscript. FL remembers the choice across sessions.
-5. Restart Claude Desktop / Claude Code so it picks up the new MCP entry.
+2. In loopMIDI, create a port named **`loopMIDI Port`**.
+3. `Options > MIDI Settings > Input`: select `loopMIDI Port`, set
+   **Controller type** = `fLMCP Bridge`, and click *Enable*.
+4. Open FL's script output (`Options > MIDI > View script output`) and look
+   for `[fLMCP] file+MIDI bridge ready`.
+5. No manual piano-roll script selection is required. On the first piano-roll
+   call, fLMCP tries `Ctrl+Alt+Y` and, if FL has no active script yet,
+   automatically selects and runs **ComposeWithLLM** through the piano-roll
+   menu. FL remembers that choice for later calls.
+6. Restart Claude Desktop / Claude Code so it picks up the new MCP entry.
 
 ### Optional extras
 
@@ -221,24 +227,24 @@ Or the interactive route — Claude opens the GUI:
 voice_open_gui()   # Dear PyGui window with live waveform + pitch readout
 ```
 
-## Tool catalogue (159 tools + 7 resources)
+## Tool catalogue (165 tools + 7 resources)
 
 Full reference with signatures: [`docs/TOOLS.md`](docs/TOOLS.md).
 
 | Area | Count | Highlights |
 | --- | :-: | --- |
 | Meta | 4 | ping, reconnect, bridge info, raw escape hatch |
-| Transport | 14 | play / stop / record, tempo, time sig, metronome, jog |
+| Transport | 18 | play / stop / record, tempo, punch, overdub, loop record, marker jump |
 | Patterns | 13 | create, rename, clone, color, length, find-by-name |
 | Channels | 20 | full rack, step sequencer get / set, routing, trigger |
-| Mixer | 18 | vol / pan / mute / solo / arm, sends, EQ, FX slots, routing |
+| Mixer | 19 | vol / pan / mute / solo / arm, live peaks, sends, EQ, FX slots, routing |
 | Plugins | 13 | get / set / search params, preset navigation, editor |
 | Piano roll | 10 | add, read, clear, quantize, transpose, humanize, duplicate |
 | Playlist | 14 | tracks, clips (limited), markers |
 | Arrangement | 5 | current, list, select, jump marker |
 | Automation | 5 | tempo, channel vol / pan, mixer vol, plugin params |
 | Project | 11 | metadata, save, save-as, undo / redo, render |
-| UI | 7 | show / hide windows, hints, focus |
+| UI | 8 | show / hide windows, visibility, hints, focus + form caption |
 | Generators | 14 | scales, chords, progressions, arpeggios, basslines, drums |
 | Voice-to-MIDI | 5 | record + transcribe + scale-snap + send to FL, GUI |
 | Audio | 5 | analyze MP3 / WAV, slice at onsets, melody → piano roll, DnB flip |
@@ -261,9 +267,10 @@ before issuing edits.
 
 | Symptom | Fix |
 | --- | --- |
-| `bridge unavailable` from tool calls | FL not running, or the controller script isn't loaded. Open `Options > MIDI Settings > Input` and enable a row with Controller type = `fLMCP Bridge`. |
-| TCP bind error in FL output | Another copy of fLMCP is running, or firewall blocking `127.0.0.1:9876`. Close the other instance and allow `FL64.exe` in Windows Defender. |
-| Piano-roll edits don't apply | fLMCP focuses FL Studio and sends `Ctrl+Alt+Y`. If you rebound the hotkey, or FL can't be foregrounded, press `Ctrl+Alt+Y` manually once after the tool call. |
+| `bridge unavailable` from tool calls | FL is not running, the script is not loaded, or the wake port name differs. Enable `loopMIDI Port` with Controller type = `fLMCP Bridge`, or set `FL_STUDIO_MCP_MIDI_PORT` to the actual port name. |
+| Updated controller code still behaves like the old version | FL keeps the imported Python module in memory when **Enable** is merely toggled. In MIDI Settings, temporarily change **Controller type** to `(generic controller)`, then select `fLMCP Bridge` again to force a real module reload. |
+| `loopMIDI Port` not found | Start loopMIDI and create/rename the port to `loopMIDI Port`; then refresh FL's MIDI device list. |
+| Piano-roll edits don't apply | fLMCP focuses FL Studio, tries `Ctrl+Alt+Y`, then automatically selects **ComposeWithLLM** from the piano-roll menu if no state comes back. Check that a piano roll can open and that `ComposeWithLLM.pyscript` is installed. |
 | Hotkey fires the wrong script | Open any piano roll → right-click the script dropdown → set `ComposeWithLLM` as the default. |
 | `playlist_place_pattern` returns a structured error | FL's public Python API does not yet expose clip placement. Documented in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). |
 | `voice_*` tools error with `no module named sounddevice` | Install the audio extras: `pip install "fl-studio-mcp[audio]"` (or re-run `install_windows.ps1`). |
@@ -286,7 +293,7 @@ pip install -e ".[dev]"       # core + pytest (add [audio,gui] for the full stac
 pytest
 ```
 
-Tests in `tests/` run entirely offline — the TCP bridge is faked, the FL-side
+Tests in `tests/` run entirely offline — the file/MIDI bridge is faked, the FL-side
 script is imported with its FL-only modules stubbed out, and the core server
 builds without the audio extras. You don't need FL Studio (or numpy/librosa)
 running to execute the suite.
@@ -295,7 +302,7 @@ See [`CHANGELOG.md`](CHANGELOG.md) for what changed between releases.
 
 ## Contributing
 
-Issues and PRs welcome at <https://github.com/geezoria/FLStudioMCP>. Please
+Issues and PRs welcome at <https://github.com/marcostolosa/FLStudioMCP>. Please
 run `pytest` before opening a PR. Bug reports are much easier to act on if
 they include the FL build number (`Help > About`) and the snippet of `MIDI
 script output` around the failure.

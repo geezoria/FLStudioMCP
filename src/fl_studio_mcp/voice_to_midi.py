@@ -71,7 +71,10 @@ def ensure_polyphonic_deps() -> str | None:
     runtime — ONNX on Windows, TFLite on Linux, CoreML on macOS).
     """
     try:
-        import basic_pitch  # noqa: F401
+        # Import the actual entry point, not only the namespace package.  A
+        # partial install can import ``basic_pitch`` while inference still
+        # fails because resampy or the selected runtime is absent.
+        from basic_pitch.inference import predict  # noqa: F401
     except Exception:
         return (
             "polyphonic transcription needs Spotify Basic Pitch (not installed). "

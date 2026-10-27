@@ -66,3 +66,7 @@ fLMCP_state.json
 *.mp3
 *.ogg
 !tests/**/fixtures/*.wav
+.pytest-tmp/
+.pytest-tmp-*/
+.pytest-tmp-after-saveas/
+.pytest-tmp-live/

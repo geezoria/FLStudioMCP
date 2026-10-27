@@ -1,118 +1,169 @@
-"""Protocol + BridgeClient round-trip test against a fake TCP bridge."""
+"""BridgeClient tests for the file transport and MIDI wake-up."""
 
 from __future__ import annotations
 
-import socket
+import json
 import threading
 import time
 
 import pytest
 
+import fl_studio_mcp.bridge_client as bridge_client_module
 from fl_studio_mcp.bridge_client import BridgeClient
-from fl_studio_mcp.protocol import pack, read_frame
 
 
-class FakeBridge:
-    """Minimal echo server with per-action fake responses."""
+class FakeWakeBridge:
+    def __init__(self, bridge_dir):
+        self.command_file = bridge_dir / "mcp_command.json"
+        self.response_file = bridge_dir / "mcp_response.json"
+        self.wake_count = 0
 
-    def __init__(self, port: int = 19876):
-        self.port = port
-        self.sock = None
-        self.thread = None
-        self.responses: dict[str, object] = {
-            "meta.ping": {"ok": True, "bridge_version": "fake-0.1"},
-            "transport.status": {"is_playing": False, "bpm": 140.0},
-        }
-
-    def start(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", self.port))
-        self.sock.listen(1)
-        self.thread = threading.Thread(target=self._loop, daemon=True)
-        self.thread.start()
-
-    def _loop(self):
-        try:
-            conn, _ = self.sock.accept()
-            conn.settimeout(5.0)
-            while True:
-                try:
-                    req = read_frame(conn)
-                except Exception:
-                    return
-                action = req.get("action", "")
-                if action in self.responses:
-                    conn.sendall(pack({
-                        "id": req["id"], "ok": True, "result": self.responses[action]
-                    }))
-                elif action == "raise.me":
-                    conn.sendall(pack({
-                        "id": req["id"], "ok": False, "error": "boom"
-                    }))
-                else:
-                    conn.sendall(pack({
-                        "id": req["id"], "ok": True, "result": {"echo": req.get("params", {})}
-                    }))
-        except Exception:
-            pass
-
-    def stop(self):
-        if self.sock:
-            self.sock.close()
+    def wake(self):
+        self.wake_count += 1
+        request = json.loads(self.command_file.read_text(encoding="utf-8"))
+        action = request["action"]
+        if action == "raise.me":
+            response = {"id": request["id"], "ok": False, "error": "boom"}
+        elif action == "meta.ping":
+            response = {
+                "id": request["id"],
+                "ok": True,
+                "result": {"ok": True, "bridge_version": "fake-file-midi"},
+            }
+        else:
+            response = {
+                "id": request["id"],
+                "ok": True,
+                "result": {"echo": request.get("params", {})},
+            }
+        self.response_file.write_text(json.dumps(response), encoding="utf-8")
 
 
 @pytest.fixture
-def bridge():
-    b = FakeBridge()
-    b.start()
-    time.sleep(0.05)
-    yield b
-    b.stop()
+def client_and_bridge(tmp_path):
+    bridge = FakeWakeBridge(tmp_path)
+    client = BridgeClient(bridge_dir=tmp_path, wake_sender=bridge.wake, timeout=0.5)
+    return client, bridge
 
 
-def test_ping_roundtrip(bridge):
-    c = BridgeClient(port=bridge.port)
-    r = c.ping()
-    assert r["ok"] is True
-    assert r["bridge_version"] == "fake-0.1"
+def test_ping_roundtrip(client_and_bridge):
+    client, bridge = client_and_bridge
+    result = client.ping()
+    assert result == {"ok": True, "bridge_version": "fake-file-midi"}
+    assert bridge.wake_count == 1
+    assert client.is_connected() is True
 
 
-def test_echo_params(bridge):
-    c = BridgeClient(port=bridge.port)
-    r = c.call("anything.else", foo=1, bar="baz")
-    assert r == {"echo": {"foo": 1, "bar": "baz"}}
+def test_echo_params(client_and_bridge):
+    client, _ = client_and_bridge
+    result = client.call("anything.else", foo=1, bar="baz")
+    assert result == {"echo": {"foo": 1, "bar": "baz"}}
 
 
-def test_error_propagated(bridge):
-    c = BridgeClient(port=bridge.port)
+def test_error_propagated(client_and_bridge):
+    client, _ = client_and_bridge
     with pytest.raises(Exception) as exc:
-        c.call("raise.me")
+        client.call("raise.me")
     assert "boom" in str(exc.value)
 
 
-def test_reconnect_after_drop():
-    """Verify the client lazy-reconnects to a freshly-started bridge on the same port."""
-    b = FakeBridge(port=19877)
-    b.start()
-    time.sleep(0.05)
-    c = BridgeClient(port=19877, timeout=2.0)
-    c.ping()
-    b.stop()
-    c.close()  # force the stale fd to drop
-    # restart with a FRESH bridge on the same port
-    b2 = FakeBridge(port=19877)
-    b2.start()
-    time.sleep(0.05)
-    r = c.ping()
-    assert r["ok"] is True
-    b2.stop()
+def test_request_write_is_complete_before_wakeup(client_and_bridge):
+    client, bridge = client_and_bridge
+    client.call("anything.else", value="áudio")
+    request = json.loads(bridge.command_file.read_text(encoding="utf-8"))
+    assert request["params"] == {"value": "áudio"}
+    assert not (bridge.command_file.parent / "mcp_command.json.tmp").exists()
 
 
-def test_raises_when_bridge_unreachable():
-    """Fresh client with no bridge listening should raise a clear error."""
-    c = BridgeClient(port=19999, timeout=0.5)
+def test_command_replace_retries_windows_sharing_violation(tmp_path, monkeypatch):
+    bridge = FakeWakeBridge(tmp_path)
+    real_replace = bridge_client_module.os.replace
+    attempts = 0
+
+    def flaky_replace(source, destination):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("destination is briefly open in FL")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(bridge_client_module.os, "replace", flaky_replace)
+    client = BridgeClient(bridge_dir=tmp_path, wake_sender=bridge.wake, timeout=0.5)
+    assert client.call("retry.replace") == {"echo": {}}
+    assert attempts == 3
+    assert not list(tmp_path.glob("mcp_command.*.tmp"))
+
+
+def test_retries_wakeup_until_response(tmp_path):
+    wake_count = 0
+
+    def delayed_wake():
+        nonlocal wake_count
+        wake_count += 1
+        if wake_count < 2:
+            return
+        request = json.loads((tmp_path / "mcp_command.json").read_text(encoding="utf-8"))
+        (tmp_path / "mcp_response.json").write_text(
+            json.dumps({"id": request["id"], "ok": True, "result": {"retry": True}}),
+            encoding="utf-8",
+        )
+
+    client = BridgeClient(bridge_dir=tmp_path, wake_sender=delayed_wake, timeout=0.5)
+    assert client.call("retry") == {"retry": True}
+    assert wake_count >= 2
+
+
+def test_serializes_concurrent_calls(tmp_path):
+    bridge = FakeWakeBridge(tmp_path)
+    client = BridgeClient(bridge_dir=tmp_path, wake_sender=bridge.wake, timeout=0.5)
+    results = []
+
+    def invoke(value):
+        results.append(client.call("echo", value=value))
+
+    threads = [threading.Thread(target=invoke, args=(value,)) for value in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(result["echo"]["value"] for result in results) == [0, 1, 2, 3]
+
+
+def test_timeout_removes_pending_command(tmp_path):
+    client = BridgeClient(bridge_dir=tmp_path, wake_sender=lambda: None, timeout=0.05)
     with pytest.raises(Exception) as exc:
-        c.ping()
-    msg = str(exc.value).lower()
-    assert "bridge unavailable" in msg or "refused" in msg or "connection" in msg
+        client.ping()
+    assert "no response" in str(exc.value).lower()
+    assert not (tmp_path / "mcp_command.json").exists()
+
+
+def test_close_resets_connection_state(client_and_bridge):
+    client, _ = client_and_bridge
+    client.ping()
+    client.close()
+    assert client.is_connected() is False
+
+
+def test_async_automation_keeps_sending_wakeups(tmp_path):
+    command_file = tmp_path / "mcp_command.json"
+    response_file = tmp_path / "mcp_response.json"
+    wake_count = 0
+
+    def wake():
+        nonlocal wake_count
+        wake_count += 1
+        request = json.loads(command_file.read_text(encoding="utf-8"))
+        if wake_count == 1:
+            response_file.write_text(
+                json.dumps({
+                    "id": request["id"],
+                    "ok": True,
+                    "result": {"mode": "async", "approx_duration_sec": 0.03},
+                }),
+                encoding="utf-8",
+            )
+
+    client = BridgeClient(bridge_dir=tmp_path, wake_sender=wake, timeout=0.5)
+    assert client.call("automation.recordTempo")["mode"] == "async"
+    time.sleep(0.08)
+    assert wake_count >= 2

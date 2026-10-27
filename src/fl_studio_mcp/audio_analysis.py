@@ -98,11 +98,16 @@ def analyze_audio(path: str | Path,
     y, sr = load_audio(path, target_sr=target_sr)
     duration = len(y) / sr
 
-    # Tempo & beats
+    # Tempo & beats. A 256-sample hop avoids unstable neighbouring tempo bins
+    # on syncopated material (e.g. 126 BPM being reported as 129.2 at hop 512).
+    beat_hop = 256
     try:
-        tempo_arr, beats = librosa.beat.beat_track(y=y, sr=sr)
+        onset_envelope = librosa.onset.onset_strength(y=y, sr=sr, hop_length=beat_hop)
+        tempo_arr, beats = librosa.beat.beat_track(
+            onset_envelope=onset_envelope, sr=sr, hop_length=beat_hop,
+        )
         tempo = float(tempo_arr.item() if hasattr(tempo_arr, "item") else tempo_arr)
-        beats_sec = librosa.frames_to_time(beats, sr=sr).tolist()
+        beats_sec = librosa.frames_to_time(beats, sr=sr, hop_length=beat_hop).tolist()
     except Exception as e:
         log.warning("beat tracking failed: %s", e)
         tempo = 0.0
@@ -110,7 +115,9 @@ def analyze_audio(path: str | Path,
 
     # Onsets
     try:
-        onsets = librosa.onset.onset_detect(y=y, sr=sr, units="time")
+        onsets = librosa.onset.onset_detect(
+            y=y, sr=sr, units="time", hop_length=beat_hop,
+        )
         onsets_sec = [float(o) for o in onsets]
     except Exception as e:
         log.warning("onset detection failed: %s", e)

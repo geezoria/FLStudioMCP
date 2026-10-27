@@ -20,6 +20,11 @@ def register(mcp: FastMCP) -> None:
         return get_client().call("ui.focusedWindow")
 
     @mcp.tool()
+    def ui_window_status(name: WindowName | None = None) -> dict:
+        """Return visible/focused state for one FL window, or all known windows."""
+        return get_client().call("ui.windowStatus", name=name)
+
+    @mcp.tool()
     def ui_show_window(name: WindowName, focus: bool = True) -> dict:
         """Open / focus a main window by name."""
         return get_client().call("ui.showWindow", name=name, focus=focus)

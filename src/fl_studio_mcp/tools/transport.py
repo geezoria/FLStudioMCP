@@ -79,3 +79,23 @@ def register(mcp: FastMCP) -> None:
     def transport_jog(steps: int) -> dict:
         """Nudge playhead by `steps` 16th-notes (negative = backward)."""
         return get_client().call("transport.jog", steps=steps)
+
+    @mcp.tool()
+    def transport_toggle_punch() -> dict:
+        """Toggle punch-in/out recording mode."""
+        return get_client().call("transport.togglePunch")
+
+    @mcp.tool()
+    def transport_toggle_overdub() -> dict:
+        """Toggle overdub recording mode."""
+        return get_client().call("transport.toggleOverdub")
+
+    @mcp.tool()
+    def transport_toggle_loop_recording() -> dict:
+        """Toggle loop recording mode."""
+        return get_client().call("transport.toggleLoopRecording")
+
+    @mcp.tool()
+    def transport_jump_marker(direction: Literal[-1, 1] = 1) -> dict:
+        """Jump to the previous (-1) or next (+1) timeline marker."""
+        return get_client().call("transport.jumpMarker", direction=direction)

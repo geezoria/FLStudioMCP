@@ -21,7 +21,7 @@ def _emit_notes_to_piano_roll(notes_bars: list[dict], clear_first: bool = True,
                               pattern: int | None = None) -> dict:
     """Route notes (in bars) to the piano roll via the file bridge (no MIDI).
 
-    When `channel` is given and the TCP bridge is online, the target channel's
+    When `channel` is given and the file/MIDI bridge is online, the target channel's
     piano roll is opened first so the notes land on it.
     """
     actions: list[dict] = []

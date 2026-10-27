@@ -8,11 +8,11 @@ match the Python signatures.
 | Tool | Purpose |
 | --- | --- |
 | `fl_ping` | Reach the bridge; returns version + uptime |
-| `fl_reconnect` | Drop + reopen TCP connection |
+| `fl_reconnect` | Reset cached status and run a fresh file/MIDI ping |
 | `fl_bridge_info` | FL version, script dir, available API modules |
 | `fl_call_raw(action, params)` | Escape hatch — invoke any bridge action directly |
 
-## Transport (14)
+## Transport (18)
 
 `transport_play`, `transport_stop`, `transport_record`, `transport_status`,
 `transport_set_position(position, unit)`, `transport_song_length`,
@@ -20,7 +20,9 @@ match the Python signatures.
 `transport_set_tempo(bpm)`, `transport_tap_tempo`,
 `transport_set_time_signature(numerator, denominator)`,
 `transport_toggle_metronome`, `transport_toggle_countdown_before_recording`,
-`transport_jog(steps)`
+`transport_jog(steps)`, `transport_toggle_punch`,
+`transport_toggle_overdub`, `transport_toggle_loop_recording`,
+`transport_jump_marker(direction)`
 
 ## Patterns (13)
 
@@ -43,9 +45,10 @@ match the Python signatures.
 `channel_get_step_sequence(index, pattern)`, `channel_set_step_sequence(index, steps, pattern)`,
 `channel_clear_step_sequence(index, pattern)`, `channel_quick_quantize(index)`
 
-## Mixer (18)
+## Mixer (19)
 
-`mixer_count`, `mixer_track_info(track)`, `mixer_all_tracks(include_empty)`,
+`mixer_count`, `mixer_track_info(track)`, `mixer_get_peaks(track)`,
+`mixer_all_tracks(include_empty)`,
 `mixer_set_volume(track, volume)`, `mixer_set_pan(track, pan)`,
 `mixer_mute(track, muted)`, `mixer_solo(track, solo)`, `mixer_arm(track, armed)`,
 `mixer_set_name(track, name)`, `mixer_set_color(track, color)`,
@@ -71,7 +74,7 @@ match the Python signatures.
 
 `piano_roll_add_notes(notes, clear_first, channel?, pattern?)` — notes are
 dicts `{midi, time_bars, duration_bars, velocity (0..1), pan?}`. If `channel`
-is given and the TCP bridge is online, that channel's piano roll is opened
+is given and the controller bridge is online, that channel's piano roll is opened
 automatically before the edit (so the notes route to the right channel);
 otherwise the edit targets whatever piano roll is currently open. All the
 piano-roll tools below accept the same optional `channel` / `pattern`.
@@ -121,9 +124,10 @@ finishes a few seconds later without freezing FL's UI.
 `project_undo_history`, `project_save_undo(name, flags)`,
 `project_render(path, format, mode)`, `project_version`
 
-## UI (7)
+## UI (8)
 
-`ui_focused_window`, `ui_show_window(name, focus)`, `ui_hide_window(name)`,
+`ui_focused_window`, `ui_window_status(name)`,
+`ui_show_window(name, focus)`, `ui_hide_window(name)`,
 `ui_hint(message)`,
 `ui_open_piano_roll_for_channel(channel, pattern)`,
 `ui_selected_channel`, `ui_scroll_to_channel(channel)`

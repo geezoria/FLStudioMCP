@@ -8,15 +8,11 @@ fLMCP Bridge — the FL Studio side of the fl-studio-mcp Model Context Protocol 
 
 How it works
 ------------
-This script runs inside FL Studio as a "MIDI device" (no real hardware needed — it's
-loaded by configuring a virtual/loopback MIDI port or by any MIDI input that FL can
-see). On OnInit() it starts a TCP server on 127.0.0.1:9876 in a daemon thread that
-receives length-prefixed JSON-RPC requests from the fl-studio-mcp server.
-
-Requests are placed in a thread-safe queue. FL Studio's main thread calls OnIdle()
-several times per second; each OnIdle call drains the queue and executes the pending
-FL API calls on the main thread (FL's Python API is not thread-safe, so we MUST
-execute there), then pushes responses back through the socket.
+This script runs inside FL Studio as a MIDI controller bound to a loopback MIDI
+input. The MCP server writes one JSON request file and sends a dedicated MIDI CC
+as a wake-up signal. FL delivers that signal to OnMidiMsg on its main thread;
+the callback reads the request, executes the existing handler, and writes the JSON
+response. OnIdle polls the same file as a fallback on FL versions that emit it.
 
 Piano-roll edits are deferred: we stage them into `piano_roll_requests.json` inside
 this script's directory, and the fl-studio-mcp server is responsible for opening the
@@ -24,21 +20,19 @@ piano-roll window and triggering the companion `ComposeWithLLM.pyscript` via
 Ctrl+Alt+Y. After the pyscript runs, it writes `piano_roll_state.json` which the
 MCP server reads back.
 
-Protocol
---------
-Frame: [4-byte big-endian uint32 length][payload = utf-8 JSON]
-Request:      {"id": int, "action": str, "params": {...}}
-Response:     {"id": int, "ok": bool, "result": ..., "error": str|None}
-Notification: {"event": str, "data": ...}   (server push, no id)
+Transport files
+---------------
+Request:  <script dir>/mcp_command.json
+Response: <script dir>/mcp_response.json
+Envelope: {"id": int, "action": str, "params": {...}}
+
+The wake-up message is Control Change 119, value 1, on MIDI channel 16. It is
+marked handled so it does not reach instruments or alter the project.
 """
 
 import json
 import os
-import queue
-import socket
-import struct
 import sys
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -69,11 +63,10 @@ except ImportError:  # pragma: no cover - exercised only outside FL Studio
 # Configuration
 # ----------------------------------------------------------------------------
 
-BRIDGE_HOST = "127.0.0.1"
-BRIDGE_PORT = 9876
-HEADER = struct.Struct(">I")
-MAX_FRAME = 16 * 1024 * 1024
-BRIDGE_VERSION = "0.2.0"
+BRIDGE_VERSION = "0.3.0-file-midi"
+WAKE_STATUS = 0xBF  # Control Change on MIDI channel 16
+WAKE_DATA1 = 119
+WAKE_DATA2 = 1
 
 
 def _script_dir():
@@ -97,16 +90,15 @@ PR_STATE = Path(SCRIPT_DIR).parent.parent / PIANO_ROLL_DIR_NAME / "fLMCP_state.j
 # Global state
 # ----------------------------------------------------------------------------
 
-_inbox: "queue.Queue[tuple[socket.socket, dict]]" = queue.Queue()
-_server_thread = None
-_accept_socket = None
-_client_lock = threading.Lock()
 _started_at = time.monotonic()
 _idle_tick = 0
-_last_refresh_push = 0.0
-_known_clients = set()  # live client sockets for push notifications
+_last_request_id = 0
 _auto_jobs = []          # pending non-blocking automation jobs (see automation section)
 _auto_recording = False  # True while an automation clip is being recorded live
+_note_off_jobs = []      # pending preview-note releases
+
+COMMAND_FILE = os.path.join(str(SCRIPT_DIR), "mcp_command.json")
+RESPONSE_FILE = os.path.join(str(SCRIPT_DIR), "mcp_response.json")
 
 
 # ----------------------------------------------------------------------------
@@ -118,32 +110,6 @@ def _log(msg):
         print("[fLMCP] " + msg)
     except Exception:
         pass
-
-
-def _pack_frame(obj):
-    body = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    if len(body) > MAX_FRAME:
-        raise ValueError("frame too large: %d" % len(body))
-    return HEADER.pack(len(body)) + body
-
-
-def _recv_exact(sock, n):
-    buf = bytearray()
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("socket closed")
-        buf.extend(chunk)
-    return bytes(buf)
-
-
-def _read_frame(sock):
-    head = _recv_exact(sock, HEADER.size)
-    (length,) = HEADER.unpack(head)
-    if length > MAX_FRAME:
-        raise ValueError("frame length out of bounds: %d" % length)
-    body = _recv_exact(sock, length)
-    return json.loads(body.decode("utf-8"))
 
 
 def _color_to_int(color):
@@ -197,60 +163,66 @@ def _safe(fn, *a, **kw):
 
 
 # ----------------------------------------------------------------------------
-# Server thread
+# File + MIDI transport
 # ----------------------------------------------------------------------------
 
-def _serve_client(client):
-    _known_clients.add(client)
+def _read_json_file(path):
+    """Read JSON using only open/read, which works in FL's sub-interpreter."""
     try:
-        while True:
-            try:
-                req = _read_frame(client)
-            except (ConnectionError, OSError):
-                return
-            except Exception as e:
-                try:
-                    err = {"id": 0, "ok": False, "error": "frame_error: %s" % e}
-                    client.sendall(_pack_frame(err))
-                except Exception:
-                    return
-                return
-            # hand off to the FL main thread via queue
-            _inbox.put((client, req))
-    finally:
-        _known_clients.discard(client)
-        try:
-            client.close()
-        except Exception:
-            pass
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+        return json.loads(raw) if raw.strip() else None
+    except Exception:
+        return None
 
 
-def _server_loop():
-    global _accept_socket
+def _write_response(response):
+    """Overwrite the response file; no rename/delete calls run inside FL."""
     try:
-        _accept_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _accept_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        _accept_socket.bind((BRIDGE_HOST, BRIDGE_PORT))
-        _accept_socket.listen(4)
-        _log("TCP server listening on %s:%d" % (BRIDGE_HOST, BRIDGE_PORT))
+        with open(RESPONSE_FILE, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")))
+            handle.flush()
+        return True
     except Exception as e:
-        _log("failed to bind bridge port: %s" % e)
-        _accept_socket = None
-        return
+        _log("response write failed: %s" % e)
+        return False
 
-    while True:
-        try:
-            conn, addr = _accept_socket.accept()
-            conn.settimeout(60.0)
-            t = threading.Thread(target=_serve_client, args=(conn,), daemon=True)
-            t.start()
-        except Exception as e:
-            _log("accept error: %s" % e)
-            time.sleep(0.5)
+
+def _process_request_file():
+    """Execute at most one new request on FL's main thread."""
+    global _last_request_id
+    request = _read_json_file(COMMAND_FILE)
+    if not isinstance(request, dict):
+        return False
+    request_id = request.get("id")
+    # Skip only the exact id we just handled (dedupe repeated MIDI wakes for the
+    # same command). Using '==' instead of '<=' keeps the bridge usable when
+    # multiple clients, each starting its id counter from its own time.time_ns(),
+    # interleave: a later client would otherwise raise the watermark and make an
+    # earlier client's (lower-id) commands be ignored forever.
+    if not isinstance(request_id, int) or request_id == _last_request_id:
+        return False
+
+    _last_request_id = request_id
+    action = request.get("action", "")
+    params = request.get("params", {}) or {}
+    try:
+        result = _execute(action, params)
+        response = {"id": request_id, "ok": True, "result": result}
+    except Exception as e:
+        response = {
+            "id": request_id,
+            "ok": False,
+            "error": "%s: %s" % (type(e).__name__, e),
+            "traceback": traceback.format_exc(limit=3),
+        }
+        _log("action %s error: %s" % (action, e))
+    _write_response(response)
+    return True
 
 
 # ----------------------------------------------------------------------------
-# Handlers — executed on FL's main thread (from OnIdle)
+# Handlers — executed on FL's main thread (from OnMidiMsg / OnIdle)
 # ----------------------------------------------------------------------------
 
 def _execute(action, params):
@@ -280,8 +252,11 @@ def h_meta_info(_):
         "api_modules": ["transport","mixer","channels","patterns","playlist",
                         "plugins","arrangement","ui","general","device","midi"],
         "script_dir": str(SCRIPT_DIR),
-        "tcp_host": BRIDGE_HOST,
-        "tcp_port": BRIDGE_PORT,
+        "transport": "file-midi",
+        "command_file": COMMAND_FILE,
+        "response_file": RESPONSE_FILE,
+        "wake_midi": {"status": WAKE_STATUS, "data1": WAKE_DATA1, "data2": WAKE_DATA2},
+        "last_request_id": _last_request_id,
     }
 
 
@@ -416,6 +391,40 @@ def h_transport_jog(p):
     return {"steps": steps}
 
 
+def _transport_toggle_command(name):
+    fpt = _fpt(name)
+    if fpt is None:
+        return {"ok": False, "error": "midi.%s not available" % name}
+    result = transport.globalTransport(fpt, 1)
+    return {"ok": True, "command": name, "result": result}
+
+
+def h_transport_toggle_punch(_):
+    return _transport_toggle_command("FPT_Punch")
+
+
+def h_transport_toggle_overdub(_):
+    return _transport_toggle_command("FPT_Overdub")
+
+
+def h_transport_toggle_loop_recording(_):
+    return _transport_toggle_command("FPT_LoopRecord")
+
+
+def h_transport_jump_marker(p):
+    direction = 1 if int(p.get("direction", 1)) >= 0 else -1
+    fpt = _fpt("FPT_MarkerJumpJog")
+    if fpt is None:
+        return {"ok": False, "error": "midi.FPT_MarkerJumpJog not available"}
+    result = transport.globalTransport(fpt, direction)
+    return {
+        "ok": True,
+        "direction": direction,
+        "result": result,
+        "position_bars": transport.getSongPos(3),
+    }
+
+
 # ---- patterns ---------------------------------------------------------------
 
 def h_patterns_count(_):
@@ -520,6 +529,15 @@ def _ch_info(i):
     pitch_cents = _safe(channels.getChannelPitch, i, 1, use_global)
     # getChannelVolume(index, mode, useGlobalIndex): mode=False -> normalized
     # 0..1 (what setVolume expects), mode=True -> dB. The index arg comes THIRD.
+    channel_type = _safe(channels.getChannelType, i, use_global)
+    type_names = {
+        getattr(midi, "CT_Sampler", 0): "sampler",
+        getattr(midi, "CT_Hybrid", 1): "hybrid",
+        getattr(midi, "CT_GenPlug", 2): "generator_plugin",
+        getattr(midi, "CT_Layer", 3): "layer",
+        getattr(midi, "CT_AudioClip", 4): "audio_clip",
+        getattr(midi, "CT_AutoClip", 5): "automation_clip",
+    }
     return {
         "index": i,
         "name": channels.getChannelName(i, use_global),
@@ -533,7 +551,8 @@ def _ch_info(i):
         "is_solo": channels.isChannelSolo(i, use_global) == 1,
         "is_selected": channels.isChannelSelected(i, use_global) == 1,
         "fx_track": channels.getTargetFxTrack(i, use_global),
-        "type": _safe(channels.getChannelType, i, use_global),
+        "type": channel_type,
+        "type_name": type_names.get(channel_type, "unknown"),
     }
 
 
@@ -612,19 +631,19 @@ def h_channels_solo(p):
 
 def h_channels_set_name(p):
     idx = int(p["index"]); name = p.get("name", "")
-    channels.setChannelName(idx, name)
+    channels.setChannelName(idx, name, True)
     return _ch_info(idx)
 
 
 def h_channels_set_color(p):
     idx = int(p["index"])
-    channels.setChannelColor(idx, _color_to_int(p["color"]))
+    channels.setChannelColor(idx, _color_to_int(p["color"]), True)
     return _ch_info(idx)
 
 
 def h_channels_route_to_mixer(p):
     idx = int(p["index"]); tr = int(p["mixer_track"])
-    channels.setTargetFxTrack(idx, tr)
+    channels.setTargetFxTrack(idx, tr, True)
     return {"index": idx, "mixer_track": channels.getTargetFxTrack(idx, True)}
 
 
@@ -633,7 +652,41 @@ def h_channels_trigger_note(p):
     vel = int(p.get("velocity", 100))
     midi_ch = int(p.get("midi_channel", -1))
     channels.midiNoteOn(idx, note, vel, midi_ch)
-    return {"triggered": True, "note": note}
+    if vel <= 0:
+        return {"triggered": False, "released": True, "note": note, "duration_ms": 0}
+
+    duration_ms = int(p.get("duration_ms", 250) or 250)
+    duration_ms = max(1, duration_ms)
+    _note_off_jobs.append({
+        "deadline": time.monotonic() + duration_ms / 1000.0,
+        "index": idx,
+        "note": note,
+        "midi_channel": midi_ch,
+    })
+    return {
+        "triggered": True,
+        "note": note,
+        "duration_ms": duration_ms,
+        "mode": "async",
+        "approx_duration_sec": duration_ms / 1000.0,
+    }
+
+
+def _process_note_offs():
+    """Release due preview notes without blocking FL's main thread."""
+    if not _note_off_jobs:
+        return
+    now = time.monotonic()
+    pending = []
+    for job in _note_off_jobs:
+        if job["deadline"] <= now:
+            try:
+                channels.midiNoteOn(job["index"], job["note"], 0, job["midi_channel"])
+            except Exception as e:
+                _log("note-off failed: %s" % e)
+        else:
+            pending.append(job)
+    _note_off_jobs[:] = pending
 
 
 def h_channels_get_grid_bit(p):
@@ -742,6 +795,21 @@ def h_mixer_track_info(p):
             slots.append({"slot": s, "plugin_id": -1, "valid": False, "name": None})
     info["fx_slots"] = slots
     return info
+
+
+def h_mixer_peaks(p):
+    """Return live normalized left/right VU levels for one mixer track."""
+    tr = int(p["track"])
+    if not hasattr(mixer, "getTrackPeaks"):
+        return {"ok": False, "error": "mixer.getTrackPeaks not available"}
+    left = float(mixer.getTrackPeaks(tr, getattr(midi, "PEAK_L", 0)))
+    right = float(mixer.getTrackPeaks(tr, getattr(midi, "PEAK_R", 1)))
+    return {
+        "track": tr,
+        "left": left,
+        "right": right,
+        "peak": max(left, right),
+    }
 
 
 def h_mixer_all_tracks(p):
@@ -876,11 +944,10 @@ def h_mixer_set_eq_band(p):
 def h_mixer_link_channel(p):
     """Link a channel to a mixer track. `mode` legacy param is kept for API compat."""
     ch = int(p["channel"]); tr = int(p["track"])
-    select = bool(p.get("select", False))
-    if hasattr(mixer, "linkChannelToTrack"):
-        mixer.linkChannelToTrack(ch, tr, select)
-    else:
-        channels.setTargetFxTrack(ch, tr)
+    # Route via the global-index API so audio-clip channels (whose rack/group
+    # index differs from the global index) link correctly instead of raising
+    # "Index out of range".
+    channels.setTargetFxTrack(ch, tr, True)
     return {"channel": ch, "track": tr}
 
 
@@ -893,6 +960,14 @@ def _resolve_plugin_loc(p):
     # plugins.* API: (index, slot, useGlobalIndex)
     useGlobal = (location == "channel")
     return index, slot, useGlobal
+
+
+def _plugin_param_value_string(param, index, slot, use_global):
+    """Handle the FL API 38 four-argument signature and older five-argument builds."""
+    try:
+        return plugins.getParamValueString(param, index, slot, use_global)
+    except TypeError:
+        return plugins.getParamValueString(param, index, slot, 0, use_global)
 
 
 def h_plugins_is_valid(p):
@@ -922,8 +997,7 @@ def h_plugins_params(p):
                 "idx": i,
                 "name": plugins.getParamName(i, idx, slot, ug),
                 "value": plugins.getParamValue(i, idx, slot, ug),
-                # getParamValueString has a pickupMode arg BEFORE useGlobalIndex.
-                "value_string": plugins.getParamValueString(i, idx, slot, 0, ug),
+                "value_string": _plugin_param_value_string(i, idx, slot, ug),
             })
         except Exception:
             pass
@@ -935,7 +1009,7 @@ def h_plugins_get_param(p):
     pid = int(p["param"])
     return {
         "value": plugins.getParamValue(pid, idx, slot, ug),
-        "value_string": plugins.getParamValueString(pid, idx, slot, 0, ug),
+        "value_string": _plugin_param_value_string(pid, idx, slot, ug),
     }
 
 
@@ -947,7 +1021,7 @@ def h_plugins_set_param(p):
     plugins.setParamValue(v, pid, idx, slot, 0, ug)
     return {
         "value": plugins.getParamValue(pid, idx, slot, ug),
-        "value_string": plugins.getParamValueString(pid, idx, slot, 0, ug),
+        "value_string": _plugin_param_value_string(pid, idx, slot, ug),
     }
 
 
@@ -1051,7 +1125,7 @@ def h_playlist_track_info(p):
 def h_playlist_all_tracks(p):
     include_empty = bool(p.get("include_empty", False))
     out = []
-    for i in range(playlist.trackCount()):
+    for i in range(1, playlist.trackCount() + 1):
         info = _pl_info(i)
         if not include_empty and not info["name"]:
             continue
@@ -1090,7 +1164,7 @@ def h_playlist_list_clips(p):
     clips = []
     # FL API: no direct clip enumeration for playlist exists; best effort via liveRange
     try:
-        for t in (range(playlist.trackCount()) if track is None else [int(track)]):
+        for t in (range(1, playlist.trackCount() + 1) if track is None else [int(track)]):
             # we cannot enumerate clips on a playlist track via the public Python API
             # so expose the track info only and mark this limitation
             pass
@@ -1186,10 +1260,10 @@ def h_arr_play_time(_):
 #
 # Automation is recorded live: arm + play the transport, then write parameter
 # values at the right musical times so FL captures an automation clip. The naive
-# approach (time.sleep between points) would block FL's main thread inside
-# OnIdle and FREEZE the whole UI for the duration. Instead we schedule each
-# point as an absolute monotonic deadline and apply it from OnIdle without ever
-# sleeping — FL stays fully responsive while the clip records.
+# approach (time.sleep between points) would block FL's main thread inside a
+# callback and FREEZE the whole UI for the duration. Instead we schedule each
+# point as an absolute monotonic deadline and apply it from OnMidiMsg or OnIdle
+# without ever sleeping — FL stays fully responsive while the clip records.
 
 def _seconds_per_bar():
     bpm = mixer.getCurrentTempo() / 1000.0
@@ -1205,8 +1279,8 @@ def _rec_tempo(bpm):
 
 
 def _enqueue_automation(points, apply_value, value_key="value", label=""):
-    """Schedule `points` ([{time_bars, <value_key>}]) to be applied live from
-    OnIdle. `apply_value(float)` writes one value. Returns immediately."""
+    """Schedule `points` ([{time_bars, <value_key>}]) for callback processing.
+    `apply_value(float)` writes one value. Returns immediately."""
     global _auto_recording
     if not points:
         return {"ok": False, "error": "no points"}
@@ -1241,7 +1315,7 @@ def _enqueue_automation(points, apply_value, value_key="value", label=""):
 
 def _process_automation():
     """Apply any due automation points and stop recording when all jobs finish.
-    Called from OnIdle on FL's main thread. Never blocks."""
+    Called from OnMidiMsg or OnIdle on FL's main thread. Never blocks."""
     global _auto_recording
     if not _auto_jobs:
         return
@@ -1425,8 +1499,28 @@ def h_ui_focused(_):
         "focused_window": focused_name,
         "window_id": focused_id,
         "focused_form_id": _safe(ui.getFocusedFormID),
+        "focused_form_caption": _safe(ui.getFocusedFormCaption),
         "in_popup_menu": bool(_safe(ui.isInPopupMenu) == 1),
     }
+
+
+def h_ui_window_status(p):
+    requested = p.get("name")
+    names = [requested] if requested else list(_WIN_IDS.keys())
+    windows = []
+    for name in names:
+        if name not in _WIN_IDS:
+            continue
+        wid = _WIN_IDS[name]
+        windows.append({
+            "name": name,
+            "window_id": wid,
+            "visible": bool(_safe(ui.getVisible, wid)),
+            "focused": bool(_safe(ui.getFocused, wid)),
+        })
+    if requested and windows:
+        return windows[0]
+    return {"windows": windows}
 
 
 def h_ui_show_window(p):
@@ -1483,7 +1577,15 @@ def h_ui_scroll_to_channel(p):
 # ---- piano roll (staging only — real edit happens in pyscript via keystroke) ----
 
 def _stage_piano_roll_request(request):
-    PR_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+    # FL 2025's sub-interpreter has a broken os.mkdir that returns NULL (raising
+    # SystemError) even when the directory already exists. The "Piano roll
+    # scripts" folder always exists, so only attempt mkdir when it is missing,
+    # and never let a mkdir quirk abort staging.
+    try:
+        if not PR_REQUEST.parent.exists():
+            PR_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+    except (OSError, SystemError):
+        pass
     existing = []
     if PR_REQUEST.exists():
         try:
@@ -1650,6 +1752,10 @@ _HANDLERS = {
     "transport.toggleMetronome": h_transport_toggle_metronome,
     "transport.toggleCountdownBeforeRec": h_transport_toggle_countdown,
     "transport.jog": h_transport_jog,
+    "transport.togglePunch": h_transport_toggle_punch,
+    "transport.toggleOverdub": h_transport_toggle_overdub,
+    "transport.toggleLoopRecording": h_transport_toggle_loop_recording,
+    "transport.jumpMarker": h_transport_jump_marker,
     # patterns
     "patterns.count": h_patterns_count,
     "patterns.current": h_patterns_current,
@@ -1688,6 +1794,7 @@ _HANDLERS = {
     # mixer
     "mixer.count": h_mixer_count,
     "mixer.trackInfo": h_mixer_track_info,
+    "mixer.peaks": h_mixer_peaks,
     "mixer.allTracks": h_mixer_all_tracks,
     "mixer.setVolume": h_mixer_set_volume,
     "mixer.setPan": h_mixer_set_pan,
@@ -1759,6 +1866,7 @@ _HANDLERS = {
     "project.version": h_project_version,
     # ui
     "ui.focusedWindow": h_ui_focused,
+    "ui.windowStatus": h_ui_window_status,
     "ui.showWindow": h_ui_show_window,
     "ui.hideWindow": h_ui_hide_window,
     "ui.hint": h_ui_hint,
@@ -1784,110 +1892,62 @@ _HANDLERS = {
 # ----------------------------------------------------------------------------
 
 def OnInit():
-    global _server_thread
+    global _last_request_id
     _log("initializing — script dir: %s" % SCRIPT_DIR)
     _log("FL version: %s" % _safe(general.getVersion))
-    if _server_thread is None or not _server_thread.is_alive():
-        _server_thread = threading.Thread(target=_server_loop, daemon=True, name="fLMCP-TCP")
-        _server_thread.start()
-    _log("bridge ready on tcp://%s:%d" % (BRIDGE_HOST, BRIDGE_PORT))
+    old_request = _read_json_file(COMMAND_FILE)
+    if isinstance(old_request, dict) and isinstance(old_request.get("id"), int):
+        _last_request_id = old_request["id"]
+    _log("file+MIDI bridge ready; last_request_id=%d" % _last_request_id)
 
 
 def OnDeInit():
-    global _accept_socket
     _log("deinit")
-    if _accept_socket is not None:
-        try:
-            _accept_socket.close()
-        except Exception:
-            pass
-        _accept_socket = None
-    # close client connections
-    for c in list(_known_clients):
-        try:
-            c.close()
-        except Exception:
-            pass
-    _known_clients.clear()
 
 
 def OnIdle():
-    """Drain up to N requests per idle tick on the FL main thread."""
-    global _idle_tick, _last_refresh_push
+    """Fallback poll for FL versions that still emit OnIdle."""
+    global _idle_tick
     _idle_tick += 1
-    drained = 0
-    while drained < 32:
-        try:
-            client, req = _inbox.get_nowait()
-        except queue.Empty:
-            break
-        drained += 1
-        req_id = req.get("id", 0)
-        action = req.get("action", "")
-        params = req.get("params", {}) or {}
-        try:
-            result = _execute(action, params)
-            resp = {"id": req_id, "ok": True, "result": result}
-        except Exception as e:
-            tb = traceback.format_exc(limit=3)
-            resp = {"id": req_id, "ok": False, "error": "%s: %s" % (type(e).__name__, e), "traceback": tb}
-            _log("action %s error: %s" % (action, e))
-        try:
-            client.sendall(_pack_frame(resp))
-        except Exception as e:
-            _log("failed to send response: %s" % e)
-
-    # apply any due (non-blocking) automation points
+    _process_request_file()
     try:
         _process_automation()
     except Exception as e:
         _log("automation processing error: %s" % e)
-
-    # push transport notifications every ~0.5s when playing
-    now = time.monotonic()
-    if _known_clients and (now - _last_refresh_push) > 0.5:
-        _last_refresh_push = now
-        try:
-            snap = h_transport_status({})
-            frame = _pack_frame({"event": "transport.tick", "data": snap})
-            for c in list(_known_clients):
-                try:
-                    c.sendall(frame)
-                except Exception:
-                    _known_clients.discard(c)
-        except Exception:
-            pass
+    try:
+        _process_note_offs()
+    except Exception as e:
+        _log("note-off processing error: %s" % e)
 
 
 def OnMidiIn(event):
-    # We don't need MIDI for the primary channel; just ignore.
     event.handled = False
 
 
 def OnMidiMsg(event):
-    event.handled = False
+    is_wake = (
+        getattr(event, "status", None) == WAKE_STATUS
+        and getattr(event, "data1", None) == WAKE_DATA1
+        and getattr(event, "data2", None) == WAKE_DATA2
+    )
+    if is_wake:
+        _process_request_file()
+        try:
+            _process_automation()
+        except Exception as e:
+            _log("automation processing error: %s" % e)
+        try:
+            _process_note_offs()
+        except Exception as e:
+            _log("note-off processing error: %s" % e)
+        event.handled = True
+    else:
+        event.handled = False
 
 
 def OnRefresh(flags):
-    # push a refresh event to connected clients (so MCP server can invalidate cache)
-    try:
-        frame = _pack_frame({"event": "refresh", "data": {"flags": int(flags)}})
-        for c in list(_known_clients):
-            try:
-                c.sendall(frame)
-            except Exception:
-                _known_clients.discard(c)
-    except Exception:
-        pass
+    pass
 
 
 def OnProjectLoad(status):
-    try:
-        frame = _pack_frame({"event": "projectLoad", "data": {"status": status}})
-        for c in list(_known_clients):
-            try:
-                c.sendall(frame)
-            except Exception:
-                _known_clients.discard(c)
-    except Exception:
-        pass
+    pass

@@ -1,7 +1,10 @@
-"""
-Shared wire protocol for fLMCP <-> FL Studio bridge.
+"""Legacy TCP framing helpers retained for import compatibility.
 
-Length-prefixed JSON framing over TCP:
+The active FL Studio 2025 transport lives in :mod:`bridge_client` and uses
+atomic JSON files plus a MIDI wake-up. These helpers remain available to older
+third-party callers, but the controller bridge no longer opens a TCP socket.
+
+Legacy length-prefixed JSON framing:
     [4 bytes big-endian uint32 length][payload = utf-8 JSON]
 
 Request envelope:
@@ -22,6 +25,7 @@ import struct
 from dataclasses import dataclass
 from typing import Any
 
+# Compatibility defaults accepted by BridgeClient's historical constructor.
 HOST = "127.0.0.1"
 PORT = 9876
 HEADER = struct.Struct(">I")

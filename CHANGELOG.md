@@ -3,6 +3,32 @@
 All notable changes to fLMCP are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Live mixer peak metering through `mixer_get_peaks`.
+- Human-readable `type_name` values in channel information while preserving the
+  raw FL channel type number.
+- Punch, overdub and loop-record toggles plus previous/next marker jumps.
+- Window visibility/focus inspection and focused-form captions.
+
+### Fixed
+
+- Windows foreground activation now attaches input queues before sending piano-
+  roll and Save As shortcuts, so calls from background MCP hosts reach FL Studio
+  consistently.
+- The polyphonic extra now installs Basic Pitch's runtime-only `resampy` and
+  compatible `setuptools` requirements, and dependency checks import the real
+  inference entry point instead of accepting a partial namespace install.
+
+### Verified
+
+- The additions were exercised against FL Studio 2025 Producer 25.1.5: all 11
+  live checks passed, including non-zero master peaks from a sampler preview. Toggle
+  controls were called in pairs and transport, pattern, loop mode and playback
+  state were restored after the run.
+
 ## [0.3.0] — 2026-06-17
 
 ### Added — polyphonic transcription (Spotify Basic Pitch)

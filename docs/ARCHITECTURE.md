@@ -4,10 +4,9 @@
 
 1. **`fl-studio-mcp` (Python package)** — FastMCP server process launched by
    the MCP host (Claude Desktop / Claude Code). Stdio transport.
-2. **FL bridge script** — `device_FLStudioMCP.py` loaded by FL Studio as a MIDI
-   controller script. Runs a TCP listener in a background thread; command
-   execution happens on FL's main thread (`OnIdle`) because the FL API is not
-   thread-safe.
+2. **FL bridge script** — `device_FLStudioMCP.py` loaded by FL Studio as the
+   controller type for `loopMIDI Port`. It performs file RPC from `OnMidiMsg`
+   on FL's main thread and does not create threads.
 3. **Piano-roll pyscript** — `ComposeWithLLM.pyscript` installed in FL
    Studio's `Settings/Piano roll scripts/` folder. The only way to reach
    `flpianoroll.Note / score.addNote / score.deleteNote` from the Python
@@ -17,48 +16,38 @@
    file. This is how the device bridge reaches `flpianoroll` — it cannot
    import it directly.
 
-## Wire protocol
+## Controller RPC transport
 
-Length-prefixed JSON over TCP 127.0.0.1:9876:
+FL Studio 2025 runs controller scripts in a Python 3.12 sub-interpreter that
+does not allow new threads. A TCP listener therefore cannot run inside the
+controller script. fLMCP exchanges these files beside the installed script:
 
 ```
-frame  = <uint32 big-endian length> <utf-8 JSON payload>
-req    = {"id": int, "action": "mod.name", "params": {...}}
-resp   = {"id": int, "ok": bool, "result": any, "error": str|null}
-event  = {"event": "mod.name", "data": any}   # server push, no id
+mcp_command.json   {"id": int, "action": "mod.name", "params": {...}}
+mcp_response.json  {"id": int, "ok": bool, "result": any, "error": str|null}
 ```
 
-Events currently emitted by the bridge:
-
-- `transport.tick`  (~2 Hz while transport is playing)
-- `refresh`         (passes `flags` from `OnRefresh`)
-- `projectLoad`     (from `OnProjectLoad`)
+The MCP process writes a temporary file and atomically replaces the command
+file, then sends CC 119/value 1 on MIDI channel 16 through `loopMIDI Port`.
+MIDI only wakes the bridge; it never carries the JSON payload. Non-matching
+MIDI events pass through untouched.
 
 ## Request lifecycle
 
 ```
  MCP tool ─► BridgeClient.call(action, **params)
-          ─► socket.sendall(packed_frame)
+          ─► atomically replace mcp_command.json
+          ─► send the reserved loopMIDI CC
                  │
-      ┌──────────┴──────────────────────────────────────────────────────────┐
-      │                             FL Studio                                │
-      │                                                                      │
-      │  _server_loop (daemon thread) ── accept ──► _serve_client (worker)  │
-      │                                                │                     │
-      │                                                ▼                     │
-      │                                           _inbox.put((conn, req))    │
-      │                                                                      │
-      │  OnIdle():                                                           │
-      │    drained = 0                                                       │
-      │    while drained < 32:                                               │
-      │        conn, req = _inbox.get_nowait()                               │
-      │        result = _execute(req.action, req.params)                     │
-      │        conn.sendall(pack({"id": req.id, "ok": True, "result": ...})) │
-      │    (also pushes transport.tick every ~500ms)                         │
-      └──────────────────────────────────────────────────────────────────────┘
-          │
-          ▼
- MCP tool reads response frame, extracts result, returns to Claude
+                 ▼
+          FL Studio OnMidiMsg (main thread)
+          ─► validate the wake signature
+          ─► read request; ignore an already-processed id
+          ─► execute the existing _HANDLERS entry
+          ─► overwrite mcp_response.json
+                 │
+                 ▼
+ MCP process polls the matching response id and returns the result
 ```
 
 ## Piano-roll lifecycle
@@ -87,15 +76,16 @@ Events currently emitted by the bridge:
      - keystroke.wait_for_state()  ──► returns parsed state to Claude
 ```
 
-## Threading notes
+## Callback and concurrency notes
 
-- The TCP server runs in a Python daemon thread. It cannot touch FL API.
-- `_inbox` is a stdlib `queue.Queue` (thread-safe).
-- `OnIdle()` runs on FL's main thread. It drains up to 32 queued requests per
-  tick (FL idle fires at roughly 60 Hz, so throughput is >1000 calls/sec).
-- Responses are written back directly from `OnIdle()` using `sendall()` —
-  still runs on the FL main thread but blocking time is bounded by payload
-  size and the socket is local; sub-millisecond in practice.
+- On FL Studio 2025 Producer 25.1.5 (MIDI scripting API 38), live
+  instrumentation showed `OnInit`, `OnMidiIn`, and `OnMidiMsg` working while
+  `OnIdle` and `OnRefresh` remained silent during UI and transport interaction.
+- `OnMidiMsg` is the primary trigger. `OnIdle` polls the same file only as a
+  compatibility fallback for FL versions that emit it.
+- All handlers execute on FL's main thread. The client serializes concurrent
+  calls because the transport exposes one command slot and one response slot.
+- The client retries the wake-up every 100 ms until a response or timeout.
 
 ## Color handling
 
@@ -109,11 +99,9 @@ Events currently emitted by the bridge:
 
 ## Automation (non-blocking)
 
-`automation_record_*` records live automation clips. The bridge must arm + play
-the transport and write parameter values at the right musical times. It does
-**not** sleep between points — sleeping inside `OnIdle()` would block FL's main
-thread and freeze the UI. Instead each point is scheduled as an absolute
-monotonic deadline and applied from `OnIdle()` (`_process_automation`), so FL
-stays fully responsive. The tool returns immediately with
-`{"mode": "async", "scheduled": N}`; the clip finishes on its own after the last
-point. Per-point timing uses a tempo snapshot taken when the call is made.
+`automation_record_*` records live automation clips without sleeping on FL's
+main thread. Each point is scheduled against an absolute monotonic deadline.
+Because FL 2025 may not emit `OnIdle`, an async result starts a short-lived wake
+pump in the external MCP process. Its reserved CC calls `OnMidiMsg` about every
+20 ms; each callback applies due points, and the final one stops/disarms the
+transport. The background thread lives outside FL's restricted sub-interpreter.

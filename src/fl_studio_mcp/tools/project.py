@@ -32,8 +32,9 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def project_save_as(path: str) -> dict:
-        """Save the project to a new path."""
-        return get_client().call("project.saveAs", path=path)
+        """Save the active project to a new, explicit .flp path (Windows)."""
+        from ..keystroke import save_project_as_windows
+        return save_project_as_windows(path)
 
     @mcp.tool()
     def project_undo() -> dict:

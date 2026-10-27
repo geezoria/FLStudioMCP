@@ -14,11 +14,9 @@ try to spawn any threads.
 
 Requirements on user side:
   * `ComposeWithLLM.pyscript` must be installed (done by install_windows.ps1).
-  * It must be the currently-selected piano-roll script (piano roll window →
-    scripts dropdown → pick `ComposeWithLLM`).
-  * The target pattern's piano roll must be open & focused when we fire the
-    hotkey. Our keystroke helper brings FL Studio to the foreground, but the
-    user should have the correct channel's piano roll open.
+  * The target pattern's piano roll must be available. Passing `channel` lets
+    the controller bridge open it automatically. The host helper also selects
+    `ComposeWithLLM` automatically on a fresh FL profile.
 """
 
 from __future__ import annotations
@@ -59,11 +57,9 @@ def register(mcp: FastMCP) -> None:
         `notes`: list of {midi: int, time_bars: float, duration_bars: float,
                           velocity: 0..1, pan?: -1..1}.
 
-        If `channel` is given and the TCP (MIDI) bridge is online, that channel's
-        piano roll is opened automatically. Otherwise, before calling, make sure:
-          1. In FL Studio, open the target channel's piano roll (double-click
-             the channel in the Channel Rack).
-          2. Pick `ComposeWithLLM` from the piano-roll scripts dropdown.
+        If `channel` is given and the file/MIDI bridge is online, that channel's
+        piano roll is opened automatically. Otherwise, open the intended
+        channel's piano roll first; ComposeWithLLM selection is automatic.
         """
         actions: list[dict] = []
         if clear_first:

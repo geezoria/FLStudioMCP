@@ -89,13 +89,11 @@ the error response to fall back gracefully.
 ### Piano roll
 - ✅ add / delete / clear / read / quantize / transpose / humanize /
   duplicate — all via `flpianoroll.score`.
-- ⚠️ Requires FL Studio to be the foreground window so `SendInput(Ctrl+Alt+Y)`
-  lands. Bridge does best-effort `SetForegroundWindow`. If focus fails, tool
-  response has `hotkey_sent: False` — ask user to press Ctrl+Alt+Y manually.
-- ⚠️ Requires the **`ComposeWithLLM` pyscript to be the currently selected
-  piano-roll script**. When FL first loads, open any pattern's piano roll,
-  click the *scripts* dropdown (top-right of the piano roll), and pick
-  `ComposeWithLLM` once. FL remembers the choice across sessions.
+- ⚠️ Requires FL Studio to accept foreground input. The bridge does a
+  best-effort `SetForegroundWindow`, tries `Ctrl+Alt+Y`, and automatically
+  selects **ComposeWithLLM** through the piano-roll menu if no state comes
+  back. Results expose both `hotkey_sent` and `script_bootstrapped` so clients
+  can distinguish the fast path from first-run recovery.
 
 ### Transport constants
 The bridge gracefully degrades if specific `midi.FPT_*` / `midi.REC_*`
@@ -106,6 +104,10 @@ error: "...not available"}` rather than raising.
 - `transport_toggle_metronome` needs `FPT_Metronome`
 - `transport_toggle_countdown_before_recording` needs `FPT_CountDown*`
 - `transport_jog` needs `FPT_Jog`
+- `transport_toggle_punch` needs `FPT_Punch`
+- `transport_toggle_overdub` needs `FPT_Overdub`
+- `transport_toggle_loop_recording` needs `FPT_LoopRecord`
+- `transport_jump_marker` needs `FPT_MarkerJumpJog`
 - `transport_set_time_signature` needs `REC_MainTimeSigNum/Den`
 - `project_save` needs `FPT_Save` (FL 20+ has this)
 
@@ -137,15 +139,26 @@ error: "...not available"}` rather than raising.
   When Basic Pitch is absent, `polyphonic=True` returns a structured install
   hint and the monophonic engine still works.
 
-### TCP transport
-- Single-connection at a time: multiple concurrent MCP clients will serialize
-  through one TCP conn. This keeps FL's main thread predictable; typically
-  fine since Claude is the only client.
-- Bridge binds to `127.0.0.1:9876`. If another process holds that port,
-  bridge's `OnInit` logs the bind error; clients then get `bridge unavailable`.
+### File/MIDI transport
+- FL Studio 2025 controller scripts cannot start background threads, so the
+  bridge uses one atomic command file, one response file, and a reserved MIDI
+  CC wake-up through loopMIDI.
+- Calls are serialized across one request/response slot. The client retries a
+  wake every 100 ms and reports a timeout with the expected MIDI port name.
+- The default Windows output name is `loopMIDI Port`; override it with
+  `FL_STUDIO_MCP_MIDI_PORT` when using a different name.
+- The wake signature is CC 119/value 1 on channel 16. Other MIDI messages are
+  not consumed by the bridge.
 
-### OnIdle throughput
-FL Studio's `OnIdle` fires roughly 10–30 Hz depending on workload (not
-60 Hz). Each drain cycle processes up to 32 queued requests, so realistic
-throughput is a few hundred calls/sec. Individual call latency is typically
-15–80 ms round-trip.
+### Callback availability
+On FL Studio 2025 Producer 25.1.5, `OnMidiMsg` was observed reliably while
+`OnIdle` and `OnRefresh` were not emitted for the controller. `OnIdle` is only
+a fallback. Asynchronous automation is advanced by a temporary wake pump in
+the external MCP process.
+
+### Reloading controller changes
+
+Toggling **Enable** calls the already-imported module's lifecycle again but does
+not necessarily re-read `device_FLStudioMCP.py`. After updating that file, set
+the MIDI input's **Controller type** to `(generic controller)` and then back to
+`fLMCP Bridge`. This was verified on FL Studio 2025 Producer 25.1.5.

@@ -57,6 +57,10 @@ polyphonic = [
     "pretty_midi>=0.2.10",
     "mir_eval>=0.7",
     "mido>=1.2",
+    # Basic Pitch 0.4 imports resampy at inference time. resampy 0.4.2 still
+    # imports pkg_resources, which was removed in newer setuptools releases.
+    "resampy>=0.2.2,<0.4.3",
+    "setuptools<81",
 ]
 dev = [
     "pytest>=7.0",

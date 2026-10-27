@@ -1,8 +1,8 @@
 """Connection + introspection tools for the bridge itself.
 
 Two independent bridges exist:
-  * MIDI bridge — TCP server inside the FL Studio MIDI controller script
-    (requires a MIDI input row with Controller type = 'fLMCP Bridge').
+  * MIDI bridge — JSON file exchange woken through loopMIDI, handled by the
+    FL Studio MIDI controller script on the main thread.
   * Piano-roll file bridge — works without MIDI, limited to piano-roll
     operations, via the `ComposeWithLLM.pyscript`.
 """
@@ -24,10 +24,9 @@ def _midi_status() -> dict:
             "online": False,
             "error": str(e),
             "hint": (
-                "MIDI bridge needs the 'fLMCP Bridge' device script enabled in "
-                "FL Studio: Options > MIDI > Input. This requires a virtual MIDI "
-                "loopback (loopMIDI / LoopBe1). If loopMIDI was just installed, "
-                "a Windows reboot is often required to activate the kernel driver."
+                "MIDI bridge needs the 'fLMCP Bridge' device script enabled on the "
+                "same loopMIDI input that the MCP server uses as its output. Check "
+                "FL Studio: Options > MIDI > Input and FL_STUDIO_MCP_MIDI_PORT."
             ),
         }
 
@@ -38,8 +37,8 @@ def _piano_roll_status() -> dict:
         "pyscript_dir": str(PR_DIR),
         "last_state": pr_state(),
         "hint": (
-            "Open any channel's piano roll, pick `ComposeWithLLM` from the "
-            "piano-roll scripts dropdown once. No MIDI device required."
+            "ComposeWithLLM is selected automatically on the first edit if "
+            "Ctrl+Alt+Y has no active piano-roll script."
         ),
     }
 
@@ -73,7 +72,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def fl_reconnect() -> dict:
-        """Drop and reopen the TCP connection to the MIDI bridge."""
+        """Reset cached bridge status, then run a fresh file/MIDI ping."""
         get_client().close()
         return _midi_status()
 
