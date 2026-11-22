@@ -562,11 +562,49 @@ def h_patterns_clone(p):
     return {"new_index": new_idx, "name": patterns.getPatternName(new_idx)}
 
 
+def _beats_per_bar():
+    ppq = _safe(general.getRecPPQ)
+    ppb = _safe(general.getRecPPB) if hasattr(general, "getRecPPB") else None
+    if ppq and ppb:
+        return max(1, int(round(ppb / ppq)))
+    return 4
+
+
+def _unsupported(feature, needs):
+    return {"ok": False, "error": feature + " is not available in this FL Studio version",
+            "hint": "Requires " + needs + ". Use fl_introspect to see what this FL build exposes."}
+
+
 def h_patterns_set_length(p):
-    """FL's API does not expose a programmatic pattern-length setter (length is
-    derived from notes / step grid)."""
-    return {"ok": False,
-            "note": "FL Python API does not expose setPatternLength; adjust length by placing notes or step bits instead."}
+    """patterns.setPatternLength(index, beats) exists from FL 2026 (26.1)."""
+    index = int(p["index"])
+    if not 1 <= index <= patterns.patternCount():
+        raise ValueError("pattern index out of range (1-based)")
+    if not hasattr(patterns, "setPatternLength"):
+        return _unsupported("Setting pattern length", "FL Studio 2026 (26.1+)")
+    per_bar = _beats_per_bar()
+    beats = p.get("beats")
+    if beats is None:
+        beats = float(p["bars"]) * per_bar
+    beats = int(round(float(beats)))
+    if beats < 1:
+        raise ValueError("length must be at least one beat")
+    patterns.setPatternLength(index, beats)
+    length = _safe(patterns.getPatternLength, index) if hasattr(patterns, "getPatternLength") else None
+    return {"ok": True, "index": index, "requested_beats": beats, "length_beats": length,
+            "length_bars": round(length / per_bar, 3) if length else None,
+            "beats_per_bar": per_bar}
+
+
+def h_patterns_clear(p):
+    """patterns.clearPattern(index) exists from FL 2026 (26.1.3)."""
+    index = int(p["index"])
+    if not 1 <= index <= patterns.patternCount():
+        raise ValueError("pattern index out of range (1-based)")
+    if not hasattr(patterns, "clearPattern"):
+        return _unsupported("Clearing a pattern", "FL Studio 2026 (26.1.3+)")
+    patterns.clearPattern(index)
+    return {"ok": True, "cleared": index, "name": patterns.getPatternName(index)}
 
 
 def h_patterns_find_by_name(p):
@@ -800,7 +838,12 @@ def _mx_info(i):
 
 
 def h_mixer_count(_):
-    return {"count": mixer.trackCount()}
+    # trackCount() includes Master and the hidden "Current" track; FL 2025.1+
+    # getTrackCount() returns only the inserts.
+    result = {"count": mixer.trackCount()}
+    if hasattr(mixer, "getTrackCount"):
+        result["insert_count"] = _safe(mixer.getTrackCount)
+    return result
 
 
 def h_mixer_track_info(p):
@@ -1399,6 +1442,9 @@ def h_project_metadata(_):
         "loop_mode": "song" if transport.getLoopMode() == 1 else "pattern",
         "metronome": _safe(general.getUseMetronome) if hasattr(general, "getUseMetronome") else None,
         "has_unsaved_changes": bool(_safe(general.getChangedFlag)) if hasattr(general, "getChangedFlag") else None,
+        **{key: _safe(getattr(general, fn)) for key, fn in (
+            ("title", "getProjectTitle"), ("author", "getProjectAuthor"), ("genre", "getProjectGenre"))
+           if hasattr(general, fn)},
     }
 
 
@@ -1528,6 +1574,18 @@ def h_ui_hide_window(p):
 def h_ui_hint(p):
     ui.setHintMsg(p.get("message", ""))
     return {"ok": True}
+
+
+def h_ui_show_picker(p):
+    """ui.showPicker(mode, category) exists from FL 2026 (26.1): 0 = plugins, 1 = project."""
+    if not hasattr(ui, "showPicker"):
+        return _unsupported("The picker panel", "FL Studio 2026 (26.1+)")
+    modes = {"plugin": 0, "plugins": 0, "project": 1}
+    mode = modes.get(str(p.get("mode", "plugin")).lower())
+    if mode is None:
+        raise ValueError("mode must be 'plugin' or 'project'")
+    ui.showPicker(mode, int(p.get("category", -1)))
+    return {"ok": True, "shown": "plugin" if mode == 0 else "project"}
 
 
 def h_ui_open_piano_roll(p):
@@ -1735,6 +1793,7 @@ _HANDLERS = {
     "patterns.delete": h_patterns_delete,
     "patterns.clone": h_patterns_clone,
     "patterns.setLength": h_patterns_set_length,
+    "patterns.clear": h_patterns_clear,
     "patterns.findByName": h_patterns_find_by_name,
     "patterns.jumpNext": h_patterns_jump_next,
     "patterns.jumpPrev": h_patterns_jump_prev,
@@ -1836,6 +1895,7 @@ _HANDLERS = {
     "ui.showWindow": h_ui_show_window,
     "ui.hideWindow": h_ui_hide_window,
     "ui.hint": h_ui_hint,
+    "ui.showPicker": h_ui_show_picker,
     "ui.openPianoRoll": h_ui_open_piano_roll,
     "ui.selectedChannel": h_ui_selected_channel,
     "ui.scrollToChannel": h_ui_scroll_to_channel,

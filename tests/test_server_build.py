@@ -13,7 +13,7 @@ from mcp.client import Client
 from fl_studio_mcp import __version__
 from fl_studio_mcp.resources import project as project_resources
 from fl_studio_mcp.server import build_app
-from fl_studio_mcp.tools import piano_roll
+from fl_studio_mcp.tools import meta as meta_tools, piano_roll
 
 
 @pytest.fixture(autouse=True)
@@ -25,11 +25,11 @@ def default_toolsets(monkeypatch):
 def test_build_app():
     app = build_app()
     tools = run(app.list_tools)
-    assert len(tools) == 160
+    assert len(tools) == 163
     names = {t.name for t in tools}
     # Spot-check coverage across every module
     for required in [
-        "fl_ping",
+        "fl_ping", "fl_introspect",
         "transport_play", "transport_set_tempo", "transport_set_time_signature",
         "pattern_create", "pattern_clone",
         "channel_set_step_sequence", "channel_quick_quantize",
@@ -74,7 +74,7 @@ def test_mcp_discovery_and_pure_tool():
             assert client.server_info.website_url == "https://github.com/geezoria/FLStudioMCP"
 
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-            assert len(tools) == 160
+            assert len(tools) == 163
             for tool in tools.values():
                 assert tool.title and tool.title.strip()
                 assert tool.description and tool.description.strip()
@@ -147,13 +147,13 @@ def test_mcp_prompts_list_and_render():
     [
         ("lean", "", 41, {"gen_emit_bassline", "piano_roll_read", "mixer_set_volume"},
          {"fl_call_raw", "voice_to_piano_roll", "mixer_set_eq_band", "project_save"}),
-        ("core", "", 24, {"transport_tap_tempo", "project_undo", "project_save"},
+        ("core", "", 25, {"transport_tap_tempo", "project_undo", "project_save"},
          {"project_render", "channel_all"}),
-        (" patterns, MIXER ", "", 33, {"pattern_list", "mixer_get_eq"},
+        (" patterns, MIXER ", "", 34, {"pattern_list", "mixer_get_eq"},
          {"fl_bridge_info", "channel_all", "transport_play"}),
-        ("core, patterns", "project_save, pattern_list", 35, {"pattern_create", "transport_play"},
+        ("core, patterns", "project_save, pattern_list", 37, {"pattern_create", "transport_play"},
          {"project_save", "pattern_list"}),
-        ("all", "fl_ping, gen_chord_notes", 158, {"channel_all"}, {"fl_ping", "gen_chord_notes"}),
+        ("all", "fl_ping, gen_chord_notes", 161, {"channel_all"}, {"fl_ping", "gen_chord_notes"}),
     ],
 )
 def test_toolset_selection(monkeypatch, selection, disabled, count, present, absent):
@@ -241,3 +241,37 @@ def test_piano_roll_calls_serialize_off_the_event_loop(monkeypatch):
 
     run(exercise)
     assert sorted(edited_channels) == [0, 1]
+
+
+def test_ping_flags_outdated_bridge_and_introspect_filters(monkeypatch):
+    class FakeBridge:
+        def ping(self):
+            return {"ok": True, "bridge_version": "0.3.9", "api_version": 45}
+
+        def call(self, action, **params):
+            assert action == "meta.introspect"
+            assert params == {"modules": ["patterns"]}
+            return {
+                "fl_version": "26.0", "api_version": 45, "python_version": "3.12.1 (tags)",
+                "modules": {"patterns": {"callables": [
+                    {"name": "setPatternLength", "doc": "Set length"},
+                    {"name": "patternCount", "doc": "Count"},
+                ]}},
+            }
+
+    monkeypatch.setattr(meta_tools, "get_client", FakeBridge)
+
+    async def exercise():
+        async with Client(build_app()) as client:
+            ping = (await client.call_tool("fl_ping")).structured_content
+            assert ping["midi_bridge"]["online"] is True
+            assert "flmcp install" in ping["midi_bridge"]["update_hint"]
+
+            result = await client.call_tool(
+                "fl_introspect", {"module": "patterns", "search": "LENGTH"})
+            assert result.structured_content == {
+                "fl_version": "26.0", "api_version": 45, "python_version": "3.12.1",
+                "modules": {"patterns": ["setPatternLength"]},
+            }
+
+    run(exercise)

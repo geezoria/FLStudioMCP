@@ -109,3 +109,47 @@ def test_automation_is_async_non_blocking():
     assert r.get("scheduled") == 2
     # Draining the scheduler must not raise.
     bridge._process_automation()
+
+
+# ---- FL 2026 (API 39+) features: gated on hasattr, faked here ---------------
+
+def test_pattern_length_converts_bars_and_degrades(monkeypatch):
+    monkeypatch.setattr(bridge.patterns, "patternCount", lambda: 3)
+    monkeypatch.delattr(bridge.patterns, "setPatternLength", raising=False)
+    r = bridge._execute("patterns.setLength", {"index": 2, "bars": 2})
+    assert r["ok"] is False and "2026" in r["hint"]
+
+    calls = []
+    monkeypatch.setattr(bridge.patterns, "setPatternLength",
+                        lambda i, beats: calls.append((i, beats)), raising=False)
+    monkeypatch.setattr(bridge.patterns, "getPatternLength", lambda i: 12, raising=False)
+    monkeypatch.setattr(bridge.general, "getRecPPQ", lambda: 96)
+    monkeypatch.setattr(bridge.general, "getRecPPB", lambda: 96 * 3, raising=False)  # 3/4
+    r = bridge._execute("patterns.setLength", {"index": 2, "bars": 4})
+    assert calls == [(2, 12)]
+    assert r == {"ok": True, "index": 2, "requested_beats": 12, "length_beats": 12,
+                 "length_bars": 4.0, "beats_per_bar": 3}
+    bridge._execute("patterns.setLength", {"index": 1, "beats": 7})
+    assert calls[-1] == (1, 7)
+    with pytest.raises(ValueError):
+        bridge._execute("patterns.setLength", {"index": 9, "bars": 1})
+
+
+def test_pattern_clear_and_picker(monkeypatch):
+    monkeypatch.setattr(bridge.patterns, "patternCount", lambda: 2)
+    cleared, shown = [], []
+    monkeypatch.setattr(bridge.patterns, "clearPattern", cleared.append, raising=False)
+    monkeypatch.setattr(bridge.ui, "showPicker", lambda m, c: shown.append((m, c)), raising=False)
+    assert bridge._execute("patterns.clear", {"index": 2})["ok"] is True
+    assert cleared == [2]
+    assert bridge._execute("ui.showPicker", {"mode": "project"})["shown"] == "project"
+    assert shown == [(1, -1)]
+    with pytest.raises(ValueError):
+        bridge._execute("ui.showPicker", {"mode": "browser"})
+
+
+def test_metadata_includes_project_info_when_available(monkeypatch):
+    monkeypatch.setattr(bridge.general, "getProjectTitle", lambda: "Night Drive", raising=False)
+    monkeypatch.setattr(bridge.mixer, "getTrackCount", lambda: 125, raising=False)
+    assert bridge._execute("project.metadata", {})["title"] == "Night Drive"
+    assert bridge._execute("mixer.count", {})["insert_count"] == 125

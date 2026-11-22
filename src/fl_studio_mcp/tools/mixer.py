@@ -11,7 +11,8 @@ from ._meta import ToolRegistrar
 def register(tools: ToolRegistrar) -> None:
     @tools.read("Count Mixer Tracks")
     def mixer_count() -> dict[str, Any]:
-        """Number of mixer tracks (incl master @ index 0)."""
+        """Number of mixer tracks, including Master at index 0 (`count`); FL 2025.1+ also
+        reports `insert_count`, the inserts without Master and the hidden Current track."""
         return get_client().call("mixer.count")
 
     @tools.read("Get Mixer Track Details")
