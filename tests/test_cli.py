@@ -69,6 +69,45 @@ def test_doctor_reports_missing_and_stale(tmp_path, monkeypatch, capsys):
     (tmp_path / cli.BRIDGE_SCRIPT).write_bytes(
         (cli.bundled_bridge_dir() / cli.BRIDGE_SCRIPT).read_bytes())
     (tmp_path / "mcp_heartbeat.json").write_text(json.dumps({"ts": time.time() - 60}))
+    from fl_studio_mcp import bridge_client
+    monkeypatch.setattr(bridge_client, "BridgeClient",
+                        lambda **kw: _FakeBridge(error=RuntimeError("bridge unavailable")))
     assert cli.main(["doctor"]) == 1
     out = capsys.readouterr().out
     assert "[ok]   bridge script" in out and "old" in out
+
+
+class _FakeBridge:
+    def __init__(self, result=None, error=None, **_):
+        self.result, self.error = result, error
+
+    def ping(self):
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def test_doctor_accepts_wake_only_bridge_with_stale_heartbeat(tmp_path, monkeypatch, capsys):
+    """FL 2026 never calls OnIdle, so the heartbeat ages between calls; ping decides."""
+    from fl_studio_mcp import __version__, bridge_client
+
+    monkeypatch.setenv("FLMCP_BRIDGE_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "midi_output_names", lambda: ["fLMCP"])
+    monkeypatch.setattr(cli, "fl_midi_inputs", lambda: [
+        {"fl": "FL Studio 26", "port": "fLMCP", "ScriptFolder": "fLMCP Bridge", "Enabled": "1"}])
+    monkeypatch.setattr(cli, "fl_is_running", lambda: True)
+    (tmp_path / cli.BRIDGE_SCRIPT).write_bytes(
+        (cli.bundled_bridge_dir() / cli.BRIDGE_SCRIPT).read_bytes())
+    (tmp_path / "mcp_heartbeat.json").write_text(json.dumps(
+        {"ts": time.time() - 600, "idle_calls": 0, "fl_version": "26.1.7", "api_version": 45}))
+    monkeypatch.setattr(bridge_client, "BridgeClient",
+                        lambda **kw: _FakeBridge({"bridge_version": __version__}))
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "answered in" in out and "MIDI wakes only" in out and "All good." in out
+
+    monkeypatch.setattr(bridge_client, "BridgeClient",
+                        lambda **kw: _FakeBridge(error=RuntimeError("bridge unavailable")))
+    assert cli.main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "ping failed" in out and "600s old" in out

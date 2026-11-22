@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from ..bridge_client import get_client
+from ..protocol import RPCError
 from ._meta import ToolRegistrar
 
 
 def register(tools: ToolRegistrar) -> None:
     @tools.read("Count Patterns")
     def pattern_count() -> dict[str, Any]:
-        """Return total pattern count."""
+        """Count patterns in use (with content or a custom name) and the highest such index."""
         return get_client().call("patterns.count")
 
     @tools.read("Get Current Pattern")
@@ -21,7 +22,7 @@ def register(tools: ToolRegistrar) -> None:
 
     @tools.read("List Patterns")
     def pattern_list() -> dict[str, Any]:
-        """List patterns with 1-based indices, names, colors and lengths in steps."""
+        """List patterns in use plus the current one: 1-based index, name, color, length in steps (16 = one 4/4 bar)."""
         return get_client().call("patterns.list")
 
     @tools.write("Select Pattern", idempotent=True)
@@ -45,9 +46,16 @@ def register(tools: ToolRegistrar) -> None:
         return get_client().call("patterns.setColor", index=index, color=color)
 
     @tools.write("Clone Pattern")
-    def pattern_clone(index: int, new_name: str = "") -> dict[str, Any]:
-        """Clone a pattern (copy all notes & channel grid bits)."""
-        return get_client().call("patterns.clone", index=index, new_name=new_name)
+    def pattern_clone(index: int, new_name: str = "", dest_index: int | None = None) -> dict[str, Any]:
+        """Copy a 1-based pattern (notes and step grid) and select the copy.
+
+        Without dest_index FL uses the next free pattern; dest_index (FL 2026.1.1+)
+        overwrites that pattern. Returns {source_index, new_index, name}.
+        """
+        params: dict[str, Any] = {"index": index, "new_name": new_name}
+        if dest_index is not None:
+            params["dest_index"] = dest_index
+        return get_client().call("patterns.clone", **params)
 
     @tools.write("Delete Pattern", destructive=True)
     def pattern_delete(index: int) -> dict[str, Any]:
@@ -56,25 +64,36 @@ def register(tools: ToolRegistrar) -> None:
 
     @tools.write("Set Pattern Length", idempotent=True)
     def pattern_set_length(
-        index: int, bars: float | None = None, beats: int | None = None,
+        index: int, bars: float | None = None, beats: float | None = None, steps: int | None = None,
     ) -> dict[str, Any]:
-        """Set a 1-based pattern's length in bars or beats (give one). FL Studio 2026+ only.
+        """Set a 1-based pattern's length; give exactly one of bars, beats or steps. FL Studio 2026+.
 
-        Bars are converted with the project's time signature. Older FL versions
-        return ok=false; there, extend notes or the step grid instead.
+        A step is a 16th note (4 per beat); bars follow the project's time
+        signature. Returns the resulting length in steps, beats and bars. Older FL
+        versions return ok=false; there, extend notes or the step grid instead.
         """
-        if (bars is None) == (beats is None):
-            raise ValueError("give exactly one of bars or beats")
-        params = {"index": index, "bars": bars} if beats is None else {"index": index, "beats": beats}
-        return get_client().call("patterns.setLength", **params)
+        given = {k: v for k, v in (("bars", bars), ("beats", beats), ("steps", steps)) if v is not None}
+        if len(given) != 1:
+            raise ValueError("give exactly one of bars, beats or steps")
+        return get_client().call("patterns.setLength", index=index, **given)
 
     @tools.write("Clear Pattern", destructive=True)
     def pattern_clear(index: int) -> dict[str, Any]:
         """Remove all notes and steps from a 1-based pattern, keeping the pattern. FL Studio 2026+.
 
+        FL asks the user to confirm in a dialog; until they answer, FL (and every
+        other tool) waits. If nobody answers in time this returns
+        pending_confirmation=true: ask the user to click Yes or No in FL Studio.
         Undo with project_undo.
         """
-        return get_client().call("patterns.clear", index=index)
+        try:
+            return get_client().call("patterns.clear", index=index)
+        except RPCError as e:
+            if "execution status unknown" not in str(e):
+                raise
+            return {"ok": False, "pending_confirmation": True, "index": index,
+                    "hint": "FL Studio is showing a Confirm dialog for clearing the pattern. "
+                            "Ask the user to answer it in FL; the bridge resumes afterwards."}
 
     @tools.read("Find Pattern by Name")
     def pattern_find_by_name(name: str) -> dict[str, Any]:

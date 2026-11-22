@@ -40,16 +40,16 @@ the exact argument list is a best guess — verify with `meta.introspect`).
 | setCurrentTempo | mixer | `(tempo: float, asInt=0)` | 38 | WhatsNew: 25.2.4 (float tempo) |
 | setRecPPQ / setNumerator / setDenominator | general | `(int)` | 38 | WhatsNew: 25.2.4 |
 | movePattern | patterns | `(direction=1)` | 39 | 25.2.2; acts on selected patterns |
-| setPatternLength | patterns | `(index, length_beats)` | 39 | 26.1 (fixed in b4) |
-| incrementPatternLength | patterns | `(index, offset_beats)` | 39 | 26.1 |
+| setPatternLength | patterns | `(index, length_steps)` | 39 | 26.1 (fixed in b4). **Verified on 26.1.7: the unit is steps (16 = one 4/4 bar)**, matching `getPatternLength`, whose stub docs wrongly say beats |
+| incrementPatternLength | patterns | `(index, offset)` | 39 | 26.1; presumably steps like `setPatternLength` (unverified) |
 | rerollLoopStarterLoop | channels | `(index, useGlobalIndex=True)` | 39 | -1 = all loops |
 | selectTool | playlist | `(index)` | 40 | 25.2.4; `EETool_*` constants (Pencil=0, Brush=1, Del=2, IP=3, Sel=4, Zoom=5, Cut=6, Play=7, Slip=8, Mute=9, Step=10) |
 | showPicker | ui | `(mode, category=-1)` | 41 | 26.1; mode 0 plugin picker, 1 project picker |
-| getSwing / setSwing | channels | `() -> float` / `(value)` | 42 | 26.1; the manual calls them getShuffle/setShuffle, the binary exports getSwing/setSwing |
-| clonePattern | patterns | `(index=-1, destIndex=-1)` | 43 | `destIndex` added in 26.1.1 |
-| clearPattern | patterns | `(index=-1)` | 44 | 26.1.3 |
+| getSwing / setSwing | channels | `() -> float` / `(value)` | 42 | 26.1; the manual calls them getShuffle/setShuffle, the binary exports getSwing/setSwing. Verified: Channel rack global swing, no index, clamped to 0..1 |
+| clonePattern | patterns | `(index=-1, destIndex=-1)` | 43 | `destIndex` added in 26.1.1. Verified: the copy goes to the next free pattern (or `destIndex`) and becomes the selected pattern |
+| clearPattern | patterns | `(index=-1)` | 44 | 26.1.3. **Verified: opens a modal Confirm dialog** and blocks the script (and FL's UI thread) until the user answers |
 | duplicatePatternData | patterns | `(index)` | 45 | 26.1.4 |
-| getPluginMuteState / setPluginMuteState | mixer | `(index, plugIndex[, value])` | – | 2025.2; new `REC_Plug_Mute` |
+| getPluginMuteState / setPluginMuteState | mixer | `(index, plugIndex)` / `(index, plugIndex, value)` | – | 2025.2; new `REC_Plug_Mute`. Arity verified; value semantics not yet (empty slots report 1, and setting 0 sticks) |
 | releaseCC | device | ? | – | 2025.2; lets automation control a CC again |
 | flrMidiNote / flrMidiCC | device | ? | – | 2025.2; FL Studio Remote |
 | fillEachNSteps | channels | `(index, interval, …)` | – | 2025.2 |

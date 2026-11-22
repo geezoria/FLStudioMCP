@@ -113,30 +113,75 @@ def test_automation_is_async_non_blocking():
 
 # ---- FL 2026 (API 39+) features: gated on hasattr, faked here ---------------
 
-def test_pattern_length_converts_bars_and_degrades(monkeypatch):
-    monkeypatch.setattr(bridge.patterns, "patternCount", lambda: 3)
+def _fake_patterns(monkeypatch, used, current=1, top=999):
+    """Make `used` (1-based) the patterns with content; the stubs say all are default."""
+    monkeypatch.setattr(bridge.patterns, "patternMax", lambda: top)
+    monkeypatch.setattr(bridge.patterns, "patternCount", lambda: 0)  # FL's count is no index bound
+    monkeypatch.setattr(bridge.patterns, "isPatternDefault", lambda i: i not in used)
+    monkeypatch.setattr(bridge.patterns, "getPatternName", lambda i: "Pattern %d" % i)
+    monkeypatch.setattr(bridge.patterns, "patternNumber", lambda: current)
+
+
+def test_pattern_indices_use_pattern_max_not_count(monkeypatch):
+    _fake_patterns(monkeypatch, used={1, 2, 5}, current=7, top=10)
+    assert bridge._execute("patterns.count", {}) == {"count": 3, "last_index": 5}
+    listed = [p["index"] for p in bridge._execute("patterns.list", {})["patterns"]]
+    assert listed == [1, 2, 5, 7]
+    named = []
+    monkeypatch.setattr(bridge.patterns, "setPatternName", lambda i, n: named.append((i, n)))
+    assert bridge._execute("patterns.create", {"name": "Drums"})["index"] == 6
+    assert named == [(6, "Drums")]
+    bridge._execute("patterns.rename", {"index": 9, "name": "x"})  # empty but valid
+    with pytest.raises(ValueError):
+        bridge._execute("patterns.select", {"index": 11})
+
+
+def test_pattern_clone_reads_new_index_and_gates_destination(monkeypatch):
+    _fake_patterns(monkeypatch, used={1, 2})
+    state = {"current": 1}
+    monkeypatch.setattr(bridge.patterns, "patternNumber", lambda: state["current"])
+    calls = []
+
+    def clone(*args):
+        calls.append(args)
+        state["current"] = args[1] if len(args) > 1 else 3
+
+    monkeypatch.setattr(bridge.patterns, "clonePattern", clone)
+    r = bridge._execute("patterns.clone", {"index": 1})
+    assert calls == [(1,)] and r["new_index"] == 3
+    monkeypatch.setattr(bridge.general, "getVersion", lambda: 40)
+    assert bridge._execute("patterns.clone", {"index": 1, "dest_index": 8})["ok"] is False
+    monkeypatch.setattr(bridge.general, "getVersion", lambda: 45)
+    assert bridge._execute("patterns.clone", {"index": 1, "dest_index": 8})["new_index"] == 8
+    assert calls[-1] == (1, 8)
+
+
+def test_pattern_length_uses_steps_and_degrades(monkeypatch):
+    _fake_patterns(monkeypatch, used={1})
     monkeypatch.delattr(bridge.patterns, "setPatternLength", raising=False)
     r = bridge._execute("patterns.setLength", {"index": 2, "bars": 2})
     assert r["ok"] is False and "2026" in r["hint"]
 
     calls = []
     monkeypatch.setattr(bridge.patterns, "setPatternLength",
-                        lambda i, beats: calls.append((i, beats)), raising=False)
-    monkeypatch.setattr(bridge.patterns, "getPatternLength", lambda i: 12, raising=False)
+                        lambda i, steps: calls.append((i, steps)), raising=False)
+    monkeypatch.setattr(bridge.patterns, "getPatternLength", lambda i: 48, raising=False)
     monkeypatch.setattr(bridge.general, "getRecPPQ", lambda: 96)
     monkeypatch.setattr(bridge.general, "getRecPPB", lambda: 96 * 3, raising=False)  # 3/4
     r = bridge._execute("patterns.setLength", {"index": 2, "bars": 4})
-    assert calls == [(2, 12)]
-    assert r == {"ok": True, "index": 2, "requested_beats": 12, "length_beats": 12,
-                 "length_bars": 4.0, "beats_per_bar": 3}
+    assert calls == [(2, 48)]
+    assert r == {"ok": True, "index": 2, "requested_steps": 48, "length_steps": 48,
+                 "length_beats": 12.0, "length_bars": 4.0, "steps_per_bar": 12}
     bridge._execute("patterns.setLength", {"index": 1, "beats": 7})
-    assert calls[-1] == (1, 7)
+    assert calls[-1] == (1, 28)
+    bridge._execute("patterns.setLength", {"index": 1, "steps": 5})
+    assert calls[-1] == (1, 5)
     with pytest.raises(ValueError):
-        bridge._execute("patterns.setLength", {"index": 9, "bars": 1})
+        bridge._execute("patterns.setLength", {"index": 1000, "bars": 1})
 
 
 def test_pattern_clear_and_picker(monkeypatch):
-    monkeypatch.setattr(bridge.patterns, "patternCount", lambda: 2)
+    _fake_patterns(monkeypatch, used={1, 2})
     cleared, shown = [], []
     monkeypatch.setattr(bridge.patterns, "clearPattern", cleared.append, raising=False)
     monkeypatch.setattr(bridge.ui, "showPicker", lambda m, c: shown.append((m, c)), raising=False)
@@ -146,6 +191,17 @@ def test_pattern_clear_and_picker(monkeypatch):
     assert shown == [(1, -1)]
     with pytest.raises(ValueError):
         bridge._execute("ui.showPicker", {"mode": "browser"})
+
+
+def test_channel_rack_swing_clamps_and_degrades(monkeypatch):
+    monkeypatch.delattr(bridge.channels, "getSwing", raising=False)
+    monkeypatch.delattr(bridge.channels, "setSwing", raising=False)
+    assert bridge._execute("channels.getSwing", {})["ok"] is False
+    state = {"swing": 0.0}
+    monkeypatch.setattr(bridge.channels, "getSwing", lambda: state["swing"], raising=False)
+    monkeypatch.setattr(bridge.channels, "setSwing", lambda v: state.update(swing=v), raising=False)
+    assert bridge._execute("channels.setSwing", {"amount": 1.7}) == {"ok": True, "swing": 1.0}
+    assert bridge._execute("channels.getSwing", {}) == {"ok": True, "swing": 1.0}
 
 
 def test_metadata_includes_project_info_when_available(monkeypatch):

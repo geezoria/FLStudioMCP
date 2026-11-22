@@ -51,8 +51,11 @@ command.
 - **Toolsets:** `FLMCP_TOOLSETS` (`all`, `core`, `lean` or any group list) and
   `FLMCP_DISABLE_TOOLS`. The new `fl_list_toolsets` tool lists them.
 - **FL Studio 2026 API support** (gated, so FL 2024/2025 keep working):
-  - `pattern_set_length`, which really sets the length now (in bars or beats).
-  - New `pattern_clear` tool.
+  - `pattern_set_length`, which really sets the length now (in bars, beats or
+    steps; FL's unit turned out to be steps, not beats as documented).
+  - New `pattern_clear` tool. FL asks the user to confirm, and the tool says so.
+  - `pattern_clone` can copy into a chosen pattern (`dest_index`).
+  - New `channel_get_swing` / `channel_set_swing` tools for the Channel rack swing.
   - New `ui_show_picker` tool, which opens the plugin or project picker.
   - `project_metadata` reports title, author and genre.
   - `mixer_count` reports `insert_count`.
@@ -74,6 +77,20 @@ command.
 - Bridge, CLI and FL user data folder detection honour FL's *Shared data*
   registry setting and `FLMCP_BRIDGE_DIR`.
 - Rewrote README, ARCHITECTURE and LIMITATIONS for the new transport.
+
+### Fixed
+
+- Pattern tools no longer treat `patterns.patternCount()` as the highest
+  pattern index. It is 0 in a fresh project even though *Pattern 1* exists,
+  so `pattern_set_length` and friends rejected valid patterns, and
+  `pattern_create` / `pattern_list` could miss or overwrite patterns after a
+  gap. Indices are now checked against `patternMax()`, and "in use" means
+  having content or a custom name.
+- `pattern_clone` reports the index FL really cloned into.
+- `flmcp doctor` no longer reports a working bridge as broken on FL 2026.
+  There, FL never calls the script's `OnIdle`, so the heartbeat only refreshes
+  on MIDI wakes. Doctor now pings through a wake, and it treats a missing
+  loopMIDI port as a real problem.
 
 ## [0.3.0] — 2026-06-17
 
