@@ -11,9 +11,7 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
-
-from mcp.server.fastmcp import FastMCP
+from typing import Any, Literal
 
 from ..audio_analysis import (
     analyze_audio,
@@ -29,6 +27,7 @@ from ..voice_to_midi import (
     snap_to_scale,
     transpose,
 )
+from ._meta import ToolRegistrar
 
 
 def _check_audio_deps(polyphonic: bool = False) -> str | None:
@@ -126,10 +125,10 @@ def _reese_bass(key_root_midi: int, length_bars: float,
     return notes
 
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+def register(tools: ToolRegistrar) -> None:
+    @tools.read("Analyze Audio File")
     def audio_analyze(path: str, extract_melody: bool = False,
-                      polyphonic: bool = False) -> dict:
+                      polyphonic: bool = False) -> dict[str, Any]:
         """Analyze an audio file: tempo, key, onsets, loudness, (optional) notes.
 
         Accepts any format libsndfile supports: WAV, FLAC, MP3, OGG, AIFF...
@@ -151,13 +150,13 @@ def register(mcp: FastMCP) -> None:
                                   "confidence": n.confidence}
                                  for n in a.notes] if extract_melody else []}
 
-    @mcp.tool()
+    @tools.write("Slice Audio File", destructive=True)
     def audio_slice(path: str, output_dir: str | None = None,
-                    max_slices: int = 32) -> dict:
+                    max_slices: int = 32) -> dict[str, Any]:
         """Slice audio at detected onsets; save each slice as WAV on disk.
 
-        Great for chopping a drum loop or sampled track into one-shots you
-        can drag into FL's channel rack as sampler voices.
+        Write up to max_slices WAV files and return their paths and count.
+        Use a fresh output_dir to avoid overwriting earlier slices.
         """
         err = ensure_audio_deps()
         if err:
@@ -168,17 +167,17 @@ def register(mcp: FastMCP) -> None:
                                  max_slices=max_slices)
         return {"ok": True, "slices": slices, "count": len(slices)}
 
-    @mcp.tool()
+    @tools.write("Transcribe Audio to Piano Roll", destructive=True)
     def audio_melody_to_piano_roll(path: str,
                                    bpm: float | None = None,
                                    snap_to_detected_key: bool = True,
                                    transpose_semitones: int = 0,
                                    min_confidence: float = 0.3,
                                    polyphonic: bool = False,
-                                   clear_first: bool = True) -> dict:
+                                   clear_first: bool = True) -> dict[str, Any]:
         """Extract notes from an audio file and push them into the FL piano roll.
 
-        Default extracts the dominant monophonic line (pyin). With
+        By default clears the open piano roll. Uses the dominant monophonic line (pyin). With
         `polyphonic=True`, Spotify Basic Pitch transcribes chords / all notes
         (needs the `polyphonic` extra).
 
@@ -217,18 +216,18 @@ def register(mcp: FastMCP) -> None:
                 "detected_bpm": round(a.tempo_bpm, 1),
                 "piano_roll_state": res.get("state")}
 
-    @mcp.tool()
-    def gen_list_dnb_styles() -> dict:
+    @tools.read("List Drum & Bass Styles")
+    def gen_list_dnb_styles() -> dict[str, Any]:
         """Return available Drum & Bass drum pattern styles."""
         return {"styles": list(DNB_STYLES.keys())}
 
-    @mcp.tool()
+    @tools.write("Write Drum & Bass Groove", destructive=True)
     def gen_emit_dnb_groove(style: Literal["amen", "think", "modern", "halftime"] = "modern",
                             repeats: int = 2,
-                            clear_first: bool = True) -> dict:
+                            clear_first: bool = True) -> dict[str, Any]:
         """Emit a Drum & Bass drum groove to the open piano roll as MIDI
         note-numbers (36 kick, 38 snare, 42 closed-hat, 46 open-hat, 51 ride).
-        Each `repeat` is a 2-bar loop. Default 2 repeats = 4 bars.
+        Each repeat is a two-bar loop. clear_first replaces the open piano roll.
         """
         notes = _dnb_drum_notes(style, repeats=repeats)
         actions = ([{"action": "clear"}] if clear_first else []) + \
@@ -238,7 +237,7 @@ def register(mcp: FastMCP) -> None:
                 "style": style, "bars": 2 * max(1, repeats),
                 "piano_roll_state": res.get("state")}
 
-    @mcp.tool()
+    @tools.write("Create Drum & Bass Flip", destructive=True)
     def song_to_dnb_flip(audio_path: str,
                          target_bpm: float = 174.0,
                          dnb_style: Literal["amen", "think", "modern", "halftime"] = "amen",
@@ -246,19 +245,20 @@ def register(mcp: FastMCP) -> None:
                          include_melody: bool = True,
                          include_bass: bool = True,
                          polyphonic: bool = False,
-                         clear_first: bool = True) -> dict:
+                         clear_first: bool = True) -> dict[str, Any]:
         """One-shot: take any audio file and turn it into a DnB flip in the
         FL piano roll.
 
         Pipeline:
           1. Analyze the file (tempo, key, melody/notes).
-          2. Emit a DnB drum groove at `target_bpm`, `dnb_bars` bars long.
-          3. (optional) Add the extracted melody, quantized to the detected
+          2. Generate a DnB groove in two-bar loops. Even dnb_bars fits exactly.
+          3. Use target_bpm to map transcribed seconds to bars. Set FL tempo separately.
+          4. (optional) Add the extracted melody, quantized to the detected
              key, on top. `polyphonic=True` captures chords (Basic Pitch; needs
              the `polyphonic` extra) instead of a single line.
-          4. (optional) Drop in a sub-bass on the detected root.
+          5. (optional) Drop in a sub-bass on the detected root.
 
-        Note: everything is written into the currently-open piano roll
+        clear_first replaces existing notes. Everything is written into the open piano roll
         (single channel). For a proper mix, duplicate the channel in FL and
         route by MIDI range (drums 36-51, bass < 40, melody > 55).
         """

@@ -19,13 +19,17 @@ import textwrap
 def test_build_app_does_not_import_audio_deps():
     code = textwrap.dedent(
         """
+        import os
         import sys
+        from anyio import run
         from fl_studio_mcp.server import build_app
+        os.environ.pop('FLMCP_TOOLSETS', None)
+        os.environ.pop('FLMCP_DISABLE_TOOLS', None)
         app = build_app()
         heavy = [m for m in ('numpy', 'librosa', 'sounddevice', 'soundfile', 'scipy')
                  if m in sys.modules]
         assert not heavy, 'heavy deps imported at build time: %r' % heavy
-        n = len(app._tool_manager.list_tools())
+        n = len(run(app.list_tools))
         assert n >= 150, 'expected >= 150 tools, got %d' % n
         print('OK', n)
         """

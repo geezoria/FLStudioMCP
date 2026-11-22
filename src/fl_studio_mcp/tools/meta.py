@@ -1,18 +1,13 @@
-"""Connection + introspection tools for the bridge itself.
-
-Two independent bridges exist:
-  * MIDI bridge — TCP server inside the FL Studio MIDI controller script
-    (requires a MIDI input row with Controller type = 'fLMCP Bridge').
-  * Piano-roll file bridge — works without MIDI, limited to piano-roll
-    operations, via the `ComposeWithLLM.pyscript`.
-"""
+"""Health, tool discovery and low-level bridge access."""
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from collections.abc import Callable
+from typing import Any
 
 from ..bridge_client import get_client
 from ..file_bridge import is_installed as pr_installed, read_state as pr_state, PR_DIR
+from ._meta import ToolRegistrar
 
 
 def _midi_status() -> dict:
@@ -24,10 +19,8 @@ def _midi_status() -> dict:
             "online": False,
             "error": str(e),
             "hint": (
-                "MIDI bridge needs the 'fLMCP Bridge' device script enabled in "
-                "FL Studio: Options > MIDI > Input. This requires a virtual MIDI "
-                "loopback (loopMIDI / LoopBe1). If loopMIDI was just installed, "
-                "a Windows reboot is often required to activate the kernel driver."
+                "Enable the fLMCP Bridge controller script in FL Studio "
+                "(Options > MIDI Settings, controller type 'fLMCP Bridge')."
             ),
         }
 
@@ -44,10 +37,10 @@ def _piano_roll_status() -> dict:
     }
 
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    def fl_ping() -> dict:
-        """Report health of BOTH bridges.
+def register(tools: ToolRegistrar, describe_toolsets: Callable[[], dict[str, Any]]) -> None:
+    @tools.read("Check FL Studio Bridge Health")
+    def fl_ping() -> dict[str, Any]:
+        """Check controller bridge connectivity and piano-roll script installation.
 
         Returns:
             {
@@ -71,14 +64,14 @@ def register(mcp: FastMCP) -> None:
             "available_capabilities": sorted(set(caps)),
         }
 
-    @mcp.tool()
-    def fl_reconnect() -> dict:
-        """Drop and reopen the TCP connection to the MIDI bridge."""
+    @tools.write("Reconnect FL Studio Bridge")
+    def fl_reconnect() -> dict[str, Any]:
+        """Reset the controller bridge client and return the new health status."""
         get_client().close()
         return _midi_status()
 
-    @mcp.tool()
-    def fl_bridge_info() -> dict:
+    @tools.read("Get FL Studio Bridge Details")
+    def fl_bridge_info() -> dict[str, Any]:
         """Detailed info about the MIDI bridge (fails if it's offline)."""
         try:
             return get_client().call("meta.info")
@@ -86,7 +79,12 @@ def register(mcp: FastMCP) -> None:
             return {"ok": False, "error": str(e),
                     "hint": "MIDI bridge offline. fl_ping shows piano-roll fallback status."}
 
-    @mcp.tool()
-    def fl_call_raw(action: str, params: dict | None = None) -> dict:
+    @tools.write("Call FL Studio Bridge Action", destructive=True)
+    def fl_call_raw(action: str, params: dict | None = None) -> dict[str, Any]:
         """Escape hatch: invoke any action the MIDI bridge accepts with arbitrary params."""
         return get_client().call(action, **(params or {}))
+
+    @tools.read("List fLMCP Toolsets")
+    def fl_list_toolsets() -> dict[str, Any]:
+        """Show available groups and presets, enabled tools, and startup configuration."""
+        return describe_toolsets()

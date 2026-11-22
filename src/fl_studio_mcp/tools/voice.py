@@ -11,9 +11,7 @@ Workflow:
 
 from __future__ import annotations
 
-from typing import Optional
-
-from mcp.server.fastmcp import FastMCP
+from typing import Any, Optional
 
 from ..file_bridge import stage_and_run
 from ..voice_to_midi import (
@@ -31,6 +29,7 @@ from ..voice_to_midi import (
     transcribe_polyphonic,
     transpose,
 )
+from ._meta import ToolRegistrar
 
 
 def _check_deps(polyphonic: bool, need_mic: bool = False) -> str | None:
@@ -66,9 +65,9 @@ def _notes_to_dicts(notes: list[Note]) -> list[dict]:
     } for n in notes]
 
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    def voice_open_gui() -> dict:
+def register(tools: ToolRegistrar) -> None:
+    @tools.write("Open Voice Transcription Window")
+    def voice_open_gui() -> dict[str, Any]:
         """Launch the interactive Voice-to-MIDI GUI (Dear PyGui window).
 
         Starts a subprocess so the MCP server doesn't block. The window has
@@ -98,15 +97,15 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    @mcp.tool()
-    def voice_list_devices() -> dict:
+    @tools.read("List Microphone Devices")
+    def voice_list_devices() -> dict[str, Any]:
         """List available microphones (indexes + names + default flag)."""
         err = ensure_audio_deps(need_mic=True)
         if err:
             return {"ok": False, "error": err, "devices": []}
         return {"devices": list_input_devices()}
 
-    @mcp.tool()
+    @tools.write("Record and Transcribe Microphone")
     def voice_record_and_transcribe(
         duration_sec: float = 8.0,
         device: int | None = None,
@@ -114,7 +113,7 @@ def register(mcp: FastMCP) -> None:
         fmin_hz: float = 65.0,
         fmax_hz: float = 1200.0,
         polyphonic: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Record the mic for `duration_sec` seconds and transcribe what you played.
 
         Returns raw notes + the temp WAV path. Use this when you want to inspect
@@ -137,14 +136,14 @@ def register(mcp: FastMCP) -> None:
             "engine": "basic_pitch (polyphonic)" if polyphonic else "pyin (monophonic)",
         }
 
-    @mcp.tool()
+    @tools.read("Transcribe Audio File to Notes")
     def voice_transcribe_file(
         audio_path: str,
         min_note_sec: float = 0.08,
         fmin_hz: float = 65.0,
         fmax_hz: float = 1200.0,
         polyphonic: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Transcribe an existing audio file (wav / flac / mp3 / ogg) into MIDI notes.
 
         `polyphonic=True` uses Spotify Basic Pitch (chords / full-mix content);
@@ -161,7 +160,7 @@ def register(mcp: FastMCP) -> None:
             "engine": "basic_pitch (polyphonic)" if polyphonic else "pyin (monophonic)",
         }
 
-    @mcp.tool()
+    @tools.write("Record Melody to Piano Roll", destructive=True)
     def voice_to_piano_roll(
         duration_sec: float = 8.0,
         bpm: float = 120.0,
@@ -174,7 +173,7 @@ def register(mcp: FastMCP) -> None:
         min_note_sec: float = 0.08,
         polyphonic: bool = False,
         clear_first: bool = True,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Hum/play a melody into the mic, get it written straight into FL's piano roll.
 
         Args:
@@ -185,8 +184,8 @@ def register(mcp: FastMCP) -> None:
             scale:          e.g. "minor", "major", "dorian". One of
                             gen_list_scales. Used only when scale_root is given.
             transpose_semitones: shift all notes up/down after transcription.
-            quantize_grid_sec: snap note starts to this grid (e.g. 0.125 = 1/32
-                            at 120 BPM, 0.25 = 1/16, 0.5 = 1/8). None = off.
+            quantize_grid_sec: snap note starts to this grid (e.g. 0.125 = 1/16
+                            at 120 BPM, 0.25 = 1/8, 0.5 = 1/4). None = off.
             min_confidence: drop notes where the engine was uncertain (0..1).
             min_note_sec:   drop notes shorter than this many seconds.
             polyphonic:     use Spotify Basic Pitch (chords / overlapping notes —
@@ -266,7 +265,7 @@ def register(mcp: FastMCP) -> None:
             "hint": result.get("note"),
         }
 
-    @mcp.tool()
+    @tools.write("Write Transcribed Notes to Piano Roll", destructive=True)
     def voice_notes_to_piano_roll(
         notes: list[dict],
         bpm: float = 120.0,
@@ -275,7 +274,7 @@ def register(mcp: FastMCP) -> None:
         transpose_semitones: int = 0,
         quantize_grid_sec: Optional[float] = None,
         clear_first: bool = True,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Push an already-transcribed note list (from voice_record_and_transcribe)
         into the piano roll with optional scale snapping / transposition / quantize.
 

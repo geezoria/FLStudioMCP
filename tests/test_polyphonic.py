@@ -129,12 +129,15 @@ def test_ensure_polyphonic_deps_contract():
         assert "fl-studio-mcp[polyphonic]" in res
 
 
-def test_tools_expose_polyphonic_flag():
+def test_tools_expose_polyphonic_flag(monkeypatch):
+    from anyio import run
     from fl_studio_mcp.server import build_app
+    monkeypatch.delenv("FLMCP_TOOLSETS", raising=False)
+    monkeypatch.delenv("FLMCP_DISABLE_TOOLS", raising=False)
     app = build_app()
-    tools = {t.name: t for t in app._tool_manager.list_tools()}
+    tools = {t.name: t for t in run(app.list_tools)}
     for name in ("voice_transcribe_file", "voice_record_and_transcribe",
                  "voice_to_piano_roll", "audio_analyze",
                  "audio_melody_to_piano_roll", "song_to_dnb_flip"):
-        props = tools[name].parameters.get("properties", {})
+        props = tools[name].input_schema.get("properties", {})
         assert "polyphonic" in props, f"{name} missing polyphonic flag"
