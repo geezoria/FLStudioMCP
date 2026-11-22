@@ -360,3 +360,49 @@ def test_metadata_includes_project_info_when_available(monkeypatch):
     monkeypatch.setattr(bridge.mixer, "getTrackCount", lambda: 125, raising=False)
     assert bridge._execute("project.metadata", {})["title"] == "Night Drive"
     assert bridge._execute("mixer.count", {})["insert_count"] == 125
+
+
+def _fl_2026_value_string(param, index, slot=-1, use_global=False):
+    """FL 26.1.7's getParamValueString: at most 4 arguments, unlike the stubs."""
+    return "%d/%d/%d/%s" % (param, index, slot, use_global)
+
+
+def test_plugin_value_string_falls_back_to_four_arguments(monkeypatch):
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: True)
+    monkeypatch.setattr(bridge.plugins, "getParamCount", lambda *a: 2)
+    monkeypatch.setattr(bridge.plugins, "getParamName", lambda i, *a: "p%d" % i)
+    monkeypatch.setattr(bridge.plugins, "getParamValue", lambda *a: 0.5)
+    monkeypatch.setattr(bridge.plugins, "getParamValueString", _fl_2026_value_string)
+    r = bridge._execute("plugins.params", {"index": 4})
+    assert [p["value_string"] for p in r["params"]] == ["0/4/-1/True", "1/4/-1/True"]
+    r = bridge._execute("plugins.getParam", {"index": 0, "slot": 9, "location": "mixer", "param": 1})
+    assert r["value_string"] == "1/0/9/False"
+
+
+def test_plugin_params_reports_failing_parameter(monkeypatch):
+    def broken(*_a):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: True)
+    monkeypatch.setattr(bridge.plugins, "getParamCount", lambda *a: 1)
+    monkeypatch.setattr(bridge.plugins, "getParamName", broken)
+    r = bridge._execute("plugins.params", {"index": 4})
+    assert r["params"] == [{"idx": 0, "error": "RuntimeError: boom"}]
+
+
+def test_plugin_tools_explain_missing_plugin(monkeypatch):
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: False)
+    for action, params in [("plugins.name", {"index": 0}),
+                           ("plugins.setParam", {"index": 0, "param": 0, "value": 0.5}),
+                           ("plugins.params", {"index": 1, "slot": 3, "location": "mixer"})]:
+        r = bridge._execute(action, params)
+        assert r["ok"] is False and r["error"].startswith("no plugin at") and r["hint"]
+    assert "mixer track 1 slot 3" in r["error"]
+
+
+def test_list_markers_stops_at_first_empty_name(monkeypatch):
+    names = ["Intro", "Drop", "Auto"]
+    monkeypatch.setattr(bridge.arrangement, "getMarkerName",
+                        lambda i: names[i] if i < len(names) else "")
+    r = bridge._execute("playlist.listMarkers", {})
+    assert r["ok"] is True
+    assert r["markers"] == [{"index": i, "name": n} for i, n in enumerate(names)]

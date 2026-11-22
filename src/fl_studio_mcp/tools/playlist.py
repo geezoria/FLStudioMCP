@@ -68,7 +68,8 @@ def register(tools: ToolRegistrar) -> None:
 
     @tools.read("Check Timeline Marker Availability")
     def playlist_list_markers() -> dict[str, Any]:
-        """Check timeline marker enumeration. The public FL API currently returns an availability note."""
+        """List timeline marker names in order (index 0 first). FL exposes no marker
+        positions; use arrangement_jump_marker to move the playhead to them."""
         return get_client().call("playlist.listMarkers")
 
     @tools.write("Add Timeline Marker")
