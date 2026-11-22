@@ -111,17 +111,132 @@ def test_automation_is_async_non_blocking():
     bridge._process_automation()
 
 
-def test_automation_applies_time_zero_point_immediately(monkeypatch):
+class FakeTransport:
+    """Record/play toggles that report their state, like FL's transport module."""
+
+    def __init__(self):
+        self.playing = 0
+        self.recording = 0
+        self.calls = []
+
+    def isPlaying(self):
+        return self.playing
+
+    def isRecording(self):
+        return self.recording
+
+    def start(self):
+        self.calls.append("start")
+        self.playing ^= 1
+
+    def stop(self):
+        self.calls.append("stop")
+        self.playing = 0
+
+    def record(self):
+        self.calls.append("record")
+        self.recording ^= 1
+
+
+@pytest.fixture
+def fake_automation(monkeypatch):
+    fake = FakeTransport()
+    clock = {"t": 1000.0}
     applied = []
+    prompt = {"open": False}
+    monkeypatch.setattr(bridge, "transport", fake)
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: clock["t"])
     monkeypatch.setattr(bridge, "_rec_tempo", lambda bpm: applied.append(bpm))
+    monkeypatch.setattr(bridge, "_song_transport", lambda: None)
+    monkeypatch.setattr(bridge, "_record_prompt_open", lambda: prompt["open"])
+    monkeypatch.setattr(bridge, "_seconds_per_bar", lambda: 2.0)
     bridge._auto_jobs.clear()
-    r = bridge._execute(
-        "automation.recordTempo",
-        {"points": [{"time_bars": 0, "bpm": 100}, {"time_bars": 8, "bpm": 140}]},
-    )
-    assert r["mode"] == "async"
+    bridge._set_auto_state(None)
+
+    def tick(dt=0.0):
+        clock["t"] += dt
+        bridge._process_automation()
+
+    yield fake, applied, prompt, tick
+    bridge._auto_jobs.clear()
+    bridge._set_auto_state(None)
+
+
+def _record_tempo(points):
+    r = bridge._execute("automation.recordTempo", {"points": points})
+    bridge._process_automation()   # the command's own tick
+    return r
+
+
+def test_automation_starts_playback_after_arming_and_times_from_there(fake_automation):
+    fake, applied, _, tick = fake_automation
+    r = _record_tempo([{"time_bars": 0, "bpm": 100}, {"time_bars": 1, "bpm": 140}])
+    assert r["mode"] == "async" and r["start_timeout_sec"] > 0
+    # Armed, but starting in the same callback would cancel the arm in FL.
+    assert fake.calls == ["record"] and applied == []
+    tick(bridge.AUTO_ARM_SETTLE + 0.01)
+    assert fake.calls == ["record", "start"]
+    tick(0.02)                      # playback confirmed: time 0 starts here
     assert applied == [100]
-    bridge._auto_jobs.clear()
+    tick(1.0)
+    assert applied == [100]
+    tick(1.0)                       # 1 bar = 2 s
+    assert applied == [100, 140]
+    assert fake.calls == ["record", "start", "stop", "record"]
+    assert (fake.playing, fake.recording) == (0, 0)
+    assert bridge._auto_state is None
+
+
+def test_automation_waits_for_record_prompt(fake_automation):
+    fake, applied, prompt, tick = fake_automation
+    _record_tempo([{"time_bars": 0, "bpm": 100}])
+    prompt["open"] = True           # FL asks "What would you like to record?"
+    tick(1.0)
+    tick(1.0)
+    assert fake.calls == ["record"]    # start() now would close the prompt and cancel
+    prompt["open"] = False          # answered
+    tick(0.02)
+    tick(0.02)
+    assert applied == [100]
+
+
+def test_automation_aborts_when_prompt_is_cancelled(fake_automation):
+    fake, applied, _, tick = fake_automation
+    _record_tempo([{"time_bars": 0, "bpm": 100}])
+    fake.recording = 0              # prompt closed with X: Record never armed
+    tick(bridge.AUTO_ARM_SETTLE + 0.01)
+    assert applied == [] and "start" not in fake.calls
+    assert bridge._auto_state is None
+    assert fake.calls == ["record"]    # never toggles Record back on
+
+
+def test_automation_retries_unsafe_point(fake_automation, monkeypatch):
+    fake, applied, _, tick = fake_automation
+    busy = {"n": 2}
+
+    def apply(bpm):
+        if busy["n"]:
+            busy["n"] -= 1
+            raise RuntimeError("Operation unsafe at current time")
+        applied.append(bpm)
+
+    monkeypatch.setattr(bridge, "_rec_tempo", apply)
+    _record_tempo([{"time_bars": 0, "bpm": 100}])
+    tick(bridge.AUTO_ARM_SETTLE + 0.01)
+    tick(0.02)
+    tick(0.02)
+    tick(0.02)
+    assert applied == [100]
+
+
+def test_automation_does_not_rearm_when_already_recording(fake_automation):
+    fake, _, _, tick = fake_automation
+    fake.recording = 1
+    fake.playing = 1
+    _record_tempo([{"time_bars": 0, "bpm": 100}])
+    tick(bridge.AUTO_ARM_SETTLE + 0.01)
+    tick(0.02)
+    assert "record" not in fake.calls[:1] and "start" not in fake.calls
 
 
 def test_transport_refocuses_song_when_plugin_has_focus(monkeypatch):

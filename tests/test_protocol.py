@@ -124,7 +124,7 @@ def test_idle_ping_echo_and_heartbeat(idle):
     assert not list(idle.SCRIPT_DIR.glob("*.tmp"))
     heartbeat = _read(idle.HEARTBEAT_FILE)
     assert {"bridge_version", "protocol", "api_version", "fl_version", "pid",
-            "last_id", "idle_calls", "midi_wakes", "ts"} == heartbeat.keys()
+            "last_id", "idle_calls", "midi_wakes", "automation", "ts"} == heartbeat.keys()
     assert heartbeat["pid"] == os.getpid()
     assert abs(heartbeat["ts"] - time.time()) < 2
 
@@ -334,6 +334,12 @@ def test_async_batch_wakes_advance_real_scheduler(wake_only, monkeypatch):
     applied = threading.Event()
     monkeypatch.setattr(wake_only.mixer, "getCurrentTempo", lambda: 120_000)
     monkeypatch.setattr(wake_only, "_rec_tempo", lambda _: applied.set())
+    state = {"play": 0, "rec": 0}
+    monkeypatch.setattr(wake_only.transport, "isPlaying", lambda: state["play"])
+    monkeypatch.setattr(wake_only.transport, "isRecording", lambda: state["rec"])
+    monkeypatch.setattr(wake_only.transport, "record", lambda: state.update(rec=1 - state["rec"]))
+    monkeypatch.setattr(wake_only.transport, "start", lambda: state.update(play=1 - state["play"]))
+    monkeypatch.setattr(wake_only.transport, "stop", lambda: state.update(play=0))
     client = BridgeClient()
     [response] = client.call_batch([
         ("automation.recordTempo", {"points": [{"time_bars": 0.035, "bpm": 110}]}),

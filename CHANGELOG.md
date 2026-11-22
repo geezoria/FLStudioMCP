@@ -95,8 +95,22 @@ command.
   sends `transport.start/stop/record` to a focused plugin that has its own
   transport, such as Edison, so `transport_stop` could leave the song playing.
   The bridge first moves focus to the Playlist and reports `refocused_from`.
-  The automation recorder does the same, and it now applies points at time 0
-  immediately instead of on the next wake.
+  The automation recorder does the same.
+- Automation recording works on FL 2026. Arming Record opens FL's "What would
+  you like to record?" prompt. The recorder used to start playback in the same
+  callback, which closed the prompt and cancelled the arm. Its points then
+  failed with "Operation unsafe at current time", and the end of the run could
+  leave Record armed. The bridge now runs the recording as a state machine over
+  ticks. It arms, waits for the prompt to be answered, starts playback, and
+  counts point times from there. It retries a point that hits "unsafe", then
+  stops and disarms without ever arming Record again. On Windows the server
+  answers the prompt with *Notes and automation*, and the result says so.
+  Verified on FL 26.1.7: a mixer-volume ramp recorded into the pattern and
+  played back. The heartbeat reports the recorder's state, and the client
+  keeps waking FL until the run ends.
+- "Operation unsafe at current time" errors now name the FL dialog that is in
+  the way (Windows). `transport_record` reports when the record prompt opened,
+  and `ui_focused_window` returns `focused_form_caption`.
 - `flmcp doctor` reports when more than one FL Studio instance is running.
   They share the bridge folder, so they race for commands and a single call
   can run in both.

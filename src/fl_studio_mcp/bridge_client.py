@@ -37,6 +37,7 @@ HEARTBEAT_MAX_AGE = 5.0
 WAKE_PROBE_TIMEOUT = 0.20
 WAKE_RETRY_INTERVAL = 0.10
 AUTOMATION_WAKE_INTERVAL = 0.02
+AUTOMATION_START_GRACE = 1.0  # arming settle time plus one heartbeat interval
 IDLE_OBSERVATION_WINDOW = 1.25
 UNAVAILABLE = (
     "bridge unavailable: FL Studio not running or fLMCP Bridge script not enabled"
@@ -52,6 +53,23 @@ def _read_object(path: Path) -> dict[str, Any]:
     except (OSError, ValueError, RecursionError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _explain(error: str) -> str:
+    """Add the likely cause to FL's terse "Operation unsafe at current time"."""
+    if "unsafe" not in error.lower():
+        return error
+    from .fl_windows import open_dialogs
+
+    dialogs = open_dialogs()
+    if dialogs:
+        names = ", ".join(f"'{title}'" for title in dialogs)
+        return f"{error} (FL is showing a dialog: {names}. Answer or close it in FL, then retry.)"
+    return f"{error} (FL is busy, e.g. a dialog is open or a plugin is loading. Retry shortly.)"
+
+
+def _finite_non_negative(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(value) and value >= 0
 
 
 def _sleep_until(deadline: float, interval: float = POLL_INTERVAL) -> None:
@@ -117,6 +135,7 @@ class BridgeClient:
         self._last_id = 0
         self._pump_lock = threading.Lock()
         self._pump_until = 0.0
+        self._pump_limit = 0.0
         self._pumping = False
 
     @cached_property
@@ -228,18 +247,24 @@ class BridgeClient:
         sender = self._wake_sender
         if sender is None:
             return
-        durations = []
+        durations, limits = [], []
         for result in results:
             if not isinstance(result, dict) or result.get("mode") != "async":
                 continue
             duration = result.get("approx_duration_sec")
-            if type(duration) in (int, float) and math.isfinite(duration) and duration >= 0:
+            if _finite_non_negative(duration):
                 durations.append(duration)
+                start_timeout = result.get("start_timeout_sec")
+                limits.append(duration + (start_timeout if _finite_non_negative(start_timeout) else 0))
         if not durations:
             return
 
         with self._pump_lock:
-            self._pump_until = max(self._pump_until, time.monotonic() + max(durations) + 0.25)
+            now = time.monotonic()
+            self._pump_until = max(self._pump_until, now + max(durations) + AUTOMATION_START_GRACE)
+            # Keep waking past that while the bridge reports a recording in progress
+            # (e.g. waiting for FL's record prompt), up to the bridge's start timeout.
+            self._pump_limit = max(self._pump_limit, now + max(limits) + AUTOMATION_START_GRACE)
             if self._pumping:
                 return
             self._pumping = True
@@ -255,11 +280,13 @@ class BridgeClient:
         idle_active_until = 0.0
         while True:
             now = time.monotonic()
+            heartbeat = self._fresh_heartbeat()
             with self._pump_lock:
-                if now >= self._pump_until:
+                recording = bool(heartbeat.get("automation")) and now < self._pump_limit
+                if now >= self._pump_until and not recording:
                     self._pumping = False
                     return
-            observed = self._fresh_heartbeat().get("idle_calls", idle_calls)
+            observed = heartbeat.get("idle_calls", idle_calls)
             if type(observed) is int and observed != idle_calls:
                 if observed > idle_calls:
                     idle_active_until = now + IDLE_OBSERVATION_WINDOW
@@ -294,7 +321,7 @@ class BridgeClient:
                         log.warning("could not clear timed-out bridge command %s", request_id)
                     raise
                 if not response["ok"]:
-                    raise RPCError(action, str(response.get("error") or "unknown error"))
+                    raise RPCError(action, _explain(str(response.get("error") or "unknown error")))
 
                 if "batch" in payload:
                     records = response.get("results")

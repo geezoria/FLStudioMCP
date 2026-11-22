@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import sys
+import time
 from typing import Any, Literal
 
+from .. import fl_windows
 from ..bridge_client import get_client
 from ._meta import ToolRegistrar
+
+
+def _dialogs_soon(wait: float = 0.5) -> list[str]:
+    """FL's open dialog titles, giving a just-triggered dialog `wait` s to appear."""
+    if sys.platform != "win32":
+        return []
+    deadline = time.monotonic() + wait
+    while True:
+        titles = fl_windows.open_dialogs()
+        if titles or time.monotonic() >= deadline:
+            return titles
+        time.sleep(0.05)
 
 
 def register(tools: ToolRegistrar) -> None:
@@ -21,8 +36,16 @@ def register(tools: ToolRegistrar) -> None:
 
     @tools.write("Toggle Recording")
     def transport_record() -> dict[str, Any]:
-        """Toggle record arm state."""
-        return get_client().call("transport.record")
+        """Toggle record arm state.
+
+        Arming may open FL's "What would you like to record?" prompt. Edits fail
+        until it is answered in FL. The result reports the prompt on Windows."""
+        result = get_client().call("transport.record")
+        if isinstance(result, dict) and fl_windows.RECORD_PROMPT_TITLE in _dialogs_soon():
+            result["record_prompt_open"] = True
+            result["hint"] = ("FL asks what to record. Answer it in FL (tick 'Don't show this "
+                              "in the future' to skip it next time); edits fail until then.")
+        return result
 
     @tools.read("Read Transport Status")
     def transport_status() -> dict[str, Any]:

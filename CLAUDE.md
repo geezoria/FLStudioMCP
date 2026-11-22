@@ -16,5 +16,12 @@
 - Drive live calls with
   `BridgeClient(timeout=5).call("group.action", **params)`. Params are keyword
   arguments, not a dict.
-- Steps that only work through FL's GUI (modal dialogs, focusing a plugin window)
-  can be delegated to an agent with desktop computer use.
+- Handle FL's modal dialogs with Win32 messages, not clicks on the screen. List
+  them with `fl_windows.open_dialogs()` (class `TMsgForm`). `WM_CLOSE` cancels a
+  dialog, and a posted `WM_LBUTTONDOWN/UP` on one of its `TQuickFocusBtn`
+  children answers it, even when the window is covered. To see a dialog, capture
+  it with `PrintWindow(hwnd, hdc, 2)` rather than the screen.
+- On start FL may show a "Welcome to FL Studio" wizard (`TWelcomeWizard`). The
+  bridge doesn't load until it closes (`WM_CLOSE`). Closing FL with a modified
+  project asks "Save changes…?" in a `Confirm` dialog. Its buttons, left to
+  right, are Yes / No / Cancel.
