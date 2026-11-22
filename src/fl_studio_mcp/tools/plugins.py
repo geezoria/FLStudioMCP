@@ -9,6 +9,18 @@ from ._meta import ToolRegistrar
 
 
 def register(tools: ToolRegistrar) -> None:
+    @tools.read("Search Installed Plugins")
+    def plugin_search(
+        query: str = "", kind: Literal["effect", "generator", "any"] = "effect", limit: int = 50,
+    ) -> dict[str, Any]:
+        """Search FL's Plugin database (Fruity plugins plus every VST/VST3/AU the Plugin Manager scanned)
+        by name or category words, e.g. "reverb", "limiter", "fabfilter". Pass a returned `name` to
+        `mixer_load_effect`. Reads files on this computer; FL doesn't need to answer."""
+        from ..plugin_database import search
+
+        found = search(query, None if kind == "any" else kind)
+        return {"count": len(found), "plugins": [e.as_dict() for e in found[:max(1, limit)]]}
+
     @tools.read("Check Plugin Slot")
     def plugin_is_valid(index: int, slot: int = -1, location: Literal["channel", "mixer"] = "channel") -> dict[str, Any]:
         """Check if a plugin slot has a valid plugin loaded."""

@@ -81,8 +81,25 @@ and run `live_check.py --write` too: the stubs can't tell you what FL really doe
   title/author/genre, mixer track count, plugin mute and more. FL 2024/2025
   lack them, so gate them.
 - **Not scriptable at all:** placing or deleting playlist clips, loading
-  plugins into slots, opening or creating projects, rendering without UI. See
+  instruments into the channel rack, opening or creating projects, rendering
+  without UI. See
   `docs/LIMITATIONS.md`. Don't promise these.
+- **Effects load through `ui.launchAudioEditor`.** `launchAudioEditor(False, "",
+  track, preset, "")` loads any .fst (a Plugin database entry) into the track's
+  next free FX slot. `preset` is relative to `<FL>/Data/System`. The bridge
+  can't stat files, so the server resolves the preset (`plugin_database.py`)
+  and the bridge diffs slot names to report what loaded.
+- **FX slot switches are REC events.** `mixer.getTrackPluginId(track, slot) +
+  midi.REC_Plug_Mute` (the slot's on/off, 1 = on) and `+ midi.REC_Plug_MixLevel`.
+  FL's `midi.py` has these constants but the API stubs don't, so look them up
+  with `getattr`.
+- **Readbacks lag within a callback.** `mixer.getPluginMixLevel` and the
+  recording-option getters (`ui.isMetronomeEnabled`, `isLoopRecEnabled`…)
+  return the old value until the callback ends. Handlers report the requested
+  state instead of reading it back. Overdub has no getter at all.
+- **The user data folder moves.** `paths.user_data_dir()` reads
+  `HKCU\Software\Image-Line\Shared\Paths\Shared data`, then the real
+  Documents folder (OneDrive), and `FLMCP_USER_DATA_DIR` overrides both.
 - **No background tick on FL 2026.** FL 26.1.7 calls neither `OnIdle` nor
   `OnUpdateMeters` for the bridge, so commands only run when the MIDI wake (CC 119,
   ch 16 on the `fLMCP` port) fires `OnMidiMsg`. Anything "async" (automation

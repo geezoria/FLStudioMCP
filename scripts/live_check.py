@@ -186,6 +186,19 @@ async def writes(c: Check, seen: dict[str, dict]) -> None:
     await restored(c, "playlist_solo_track", {"track": 1, "solo": not pl["is_solo"]},
                    {"track": 1, "solo": pl["is_solo"]})
 
+    rec = seen.get("transport_recording_options", {}).get("options") or {}
+    if rec.get("metronome") is not None:
+        await restored(c, "transport_set_recording_options", {"metronome": not rec["metronome"]},
+                       {"metronome": rec["metronome"]})
+    slots = await c.call("mixer_fx_slots", track=1)
+    if slots.get("slots_enabled") is not None:
+        await restored(c, "mixer_set_slots_enabled", {"track": 1, "enabled": not slots["slots_enabled"]},
+                       {"track": 1, "enabled": slots["slots_enabled"]})
+    used = next((s for s in slots.get("slots", []) if s.get("enabled") is not None), None)
+    if used is not None:
+        await restored(c, "mixer_set_slot", {"track": 1, "slot": used["slot"], "enabled": not used["enabled"]},
+                       {"track": 1, "slot": used["slot"], "enabled": used["enabled"]})
+
     await c.expect("project_save_undo", name="fLMCP live check")
     await c.expect("project_undo")
     await c.expect("project_redo")

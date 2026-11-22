@@ -5,7 +5,7 @@
   "display_name": "fLMCP — FL Studio",
   "version": "0.4.0",
   "description": "Control FL Studio 2024–2026: transport, mixer, channels, plugins, piano roll and music generators.",
-  "long_description": "fLMCP lets Claude drive a running FL Studio: set the tempo, program step sequences, write chords and melodies into the piano roll, mix, rename and color tracks, tweak plugin parameters and more (165 tools).\n\n**One-time FL setup.** FL Studio talks to fLMCP through a small MIDI controller script. Close FL Studio, run `uvx flmcp-studio install --no-clients` (on Windows, install loopMIDI first so the installer can create the `fLMCP` port), start FL Studio again and check with `uvx flmcp-studio doctor`. The README covers macOS.\n\nThis bundle runs the `flmcp-studio` package from PyPI with uv.",
+  "long_description": "fLMCP lets Claude drive a running FL Studio: set the tempo, program step sequences, write chords and melodies into the piano roll, mix, rename and color tracks, tweak plugin parameters and more (172 tools).\n\n**One-time FL setup.** FL Studio talks to fLMCP through a small MIDI controller script. Close FL Studio, run `uvx flmcp-studio install --no-clients` (on Windows, install loopMIDI first so the installer can create the `fLMCP` port), start FL Studio again and check with `uvx flmcp-studio doctor`. The README covers macOS.\n\nThis bundle runs the `flmcp-studio` package from PyPI with uv.",
   "author": {
     "name": "geezoria",
     "url": "https://github.com/geezoria"

@@ -91,9 +91,15 @@ the error response to fall back gracefully.
 - ❌ `plugin_set_preset` (jump to a numeric preset) — `plugins.setPreset` is not
   exposed by FL's public Python API. The tool returns a structured error
   pointing at `plugin_next_preset` / `plugin_prev_preset`.
-- ❌ **Loading new plugins into a slot** — not scriptable. On FL Studio 2026,
-  `ui_show_picker("plugin")` opens the plugin picker so the user can choose one
-  in a click; after that fLMCP fully automates the parameters.
+- ✅ **Loading effects into a mixer slot** — `mixer_load_effect` finds the
+  plugin in FL's Plugin database (`plugin_search` lists it) and loads its .fst
+  preset with `ui.launchAudioEditor`, which puts it in the track's next free
+  slot. The Plugin Manager must have scanned third-party plugins first. Verified
+  on FL 26.1.7. `mixer_set_slot` turns a slot on or off and sets its mix.
+- ❌ **Loading instruments (generators) into the channel rack** — no API. On
+  FL Studio 2026, `ui_show_picker("plugin")` opens the plugin picker so the
+  user can choose one in a click; after that fLMCP fully automates the
+  parameters.
 
 ### Piano roll
 - ✅ add / delete / clear / read / quantize / transpose / humanize /
