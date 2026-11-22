@@ -91,6 +91,12 @@ command.
   There, FL never calls the script's `OnIdle`, so the heartbeat only refreshes
   on MIDI wakes. Doctor now pings through a wake, and it treats a missing
   loopMIDI port as a real problem.
+- Transport tools now act on the song while a plugin window has focus. FL
+  sends `transport.start/stop/record` to a focused plugin that has its own
+  transport, such as Edison, so `transport_stop` could leave the song playing.
+  The bridge first moves focus to the Playlist and reports `refocused_from`.
+  The automation recorder does the same, and it now applies points at time 0
+  immediately instead of on the next wake.
 
 ## [0.3.0] — 2026-06-17
 
