@@ -81,7 +81,9 @@ FL Studio main thread ───────────────┼───�
 The wake message is consumed (`event.handled = True`) and never reaches FL's
 MIDI routing. The bridge also ticks from `OnIdle` where FL calls it, but FL
 Studio 2026 (26.1.7, verified) never calls `OnIdle` for this script:
-`idle_calls` in the heartbeat stays 0 and everything runs on wakes. As a
+`idle_calls` in the heartbeat stays 0 and everything runs on wakes.
+`OnUpdateMeters` with `device.setHasMeters()` was tried as an alternative tick
+source, and FL doesn't call it either, even during playback. As a
 consequence the heartbeat only refreshes when a wake arrives. The client
 therefore treats a stale heartbeat as "probe with a wake first", not as
 "offline". Async automation recordings are driven the same way: while one
