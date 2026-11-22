@@ -36,12 +36,12 @@ def documents_dir() -> Path:
         guid = (ctypes.c_byte * 16).from_buffer_copy(UUID("{FDD39AD0-238F-46AF-ADB4-6C85480369C7}").bytes_le)
         out = wintypes.LPWSTR()
         try:
-            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out)) == 0:
-                try:
-                    if out.value:
-                        return Path(out.value)
-                finally:
-                    ctypes.windll.ole32.CoTaskMemFree(out)
+            try:
+                status = ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out))
+                if status == 0 and out.value:
+                    return Path(out.value)
+            finally:
+                ctypes.windll.ole32.CoTaskMemFree(out)  # required even when the call fails
         except (AttributeError, OSError):
             pass
     return Path.home() / "Documents"

@@ -47,6 +47,8 @@ def test_resolve_prefers_exact_then_unique_matches(database):
         plugin_database.resolve("fruity", root=database)
     with pytest.raises(ValueError, match="no effect named"):
         plugin_database.resolve("ozone", root=database)
+    # Names only: "Fruity Reeverb 2" sits in the "Delay reverb" category but isn't a delay.
+    assert plugin_database.resolve("fruity delay", root=database).name == "Fruity Delay 3"
     preset = database / "Effects" / "Dynamics" / "Fruity Limiter.fst"
     assert plugin_database.resolve(str(preset), root=database).path == preset
 
@@ -61,3 +63,16 @@ def test_user_data_dir_override(monkeypatch, tmp_path):
 
 def test_documents_dir_is_absolute():
     assert paths.documents_dir().is_absolute()
+
+
+def test_display_name_only_strips_an_x64_suffix():
+    assert plugin_database._display_name("Fruity Reeverb 2_x64") == "Fruity Reeverb 2"
+    assert plugin_database._display_name("Foo (x64)") == "Foo"
+    assert plugin_database._display_name("Max64") == "Max64"
+    assert plugin_database._display_name("Box64") == "Box64"
+
+
+def test_resolve_makes_relative_presets_absolute(database, monkeypatch):
+    monkeypatch.chdir(database)
+    entry = plugin_database.resolve("Effects/Dynamics/Fruity Limiter.fst", root=database)
+    assert entry.path.is_absolute()

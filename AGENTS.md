@@ -86,9 +86,12 @@ and run `live_check.py --write` too: the stubs can't tell you what FL really doe
   `docs/LIMITATIONS.md`. Don't promise these.
 - **Effects load through `ui.launchAudioEditor`.** `launchAudioEditor(False, "",
   track, preset, "")` loads any .fst (a Plugin database entry) into the track's
-  next free FX slot. `preset` is relative to `<FL>/Data/System`. The bridge
-  can't stat files, so the server resolves the preset (`plugin_database.py`)
-  and the bridge diffs slot names to report what loaded.
+  next free FX slot. `preset` is relative to `<FL>/Data/System` of the FL that
+  runs the bridge (found from `midi.__file__`). FL ignores absolute paths, and
+  no relative path reaches another drive, so the bridge answers `other_drive`
+  and the server copies the preset to the temp folder on FL's drive and asks
+  again. The bridge can't stat files, so the server resolves the preset
+  (`plugin_database.py`) and the bridge diffs slot names to report what loaded.
 - **FX slot switches are REC events.** `mixer.getTrackPluginId(track, slot) +
   midi.REC_Plug_Mute` (the slot's on/off, 1 = on) and `+ midi.REC_Plug_MixLevel`.
   FL's `midi.py` has these constants but the API stubs don't, so look them up
@@ -97,6 +100,14 @@ and run `live_check.py --write` too: the stubs can't tell you what FL really doe
   recording-option getters (`ui.isMetronomeEnabled`, `isLoopRecEnabled`…)
   return the old value until the callback ends. Handlers report the requested
   state instead of reading it back. Overdub has no getter at all.
+  `mixer.getTrackVolume(track, 1)` (dB) lags too, so `mixer.setVolumeDb` uses
+  FL's fader law (`_fader_position`) and the server checks it with a second
+  call. Plugin display strings are the exception: `plugins.getParamValueString`
+  follows a set at once, so the bridge searches real-unit values
+  (`_bisect_control`) within one call.
+- **Meters hold their level.** `mixer.getTrackPeaks` is linear (1.0 = 0 dBFS)
+  and keeps showing the last level for a moment after playback stops, so peak
+  watching skips the first 0.3 s after it starts playback itself.
 - **The user data folder moves.** `paths.user_data_dir()` reads
   `HKCU\Software\Image-Line\Shared\Paths\Shared data`, then the real
   Documents folder (OneDrive), and `FLMCP_USER_DATA_DIR` overrides both.

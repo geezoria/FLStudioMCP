@@ -62,6 +62,7 @@ CASES = [
     ("mixer.setSlotsEnabled", {"track": 1, "enabled": False}),
     ("mixer.peaks", {}),
     ("mixer.peaks", {"track": 0}),
+    ("mixer.snapshot", {}),
     ("transport.recordingOptions", {}),
     ("transport.setRecordingOptions", {"metronome": True, "toggle_overdub": True}),
     ("playlist.muteTrack", {"track": 0, "muted": True}),
@@ -473,6 +474,7 @@ def test_mixer_set_slot_rejects_empty_slots(monkeypatch):
 
 
 def test_mixer_load_effect_uses_the_audio_editor_launcher(monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge.midi, "__file__", str(tmp_path / "stubs" / "midi.py"), raising=False)
     fl_dir = tmp_path / "FL Studio 2026"
     preset = tmp_path / "Plugin database" / "Effects" / "Fruity Limiter.fst"
     names = {}
@@ -519,3 +521,87 @@ def test_set_recording_options_only_toggles_what_differs(monkeypatch):
     assert r["changed"] == ["loop_record"]
     assert r["options"]["loop_record"] is True and r["options"]["metronome"] is True
     assert toggled == [bridge.midi.FPT_LoopRecord]
+
+
+def test_mixer_load_effect_reports_another_drive(monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: False)
+    monkeypatch.setattr(bridge.os.path, "relpath", lambda *a: (_ for _ in ()).throw(ValueError("drives")))
+    launched = []
+    monkeypatch.setattr(bridge.ui, "launchAudioEditor", lambda *a: launched.append(a))
+    preset = str(tmp_path / "Fruity Limiter.fst")
+    r = bridge._execute("mixer.loadEffect", {"track": 1, "preset": preset, "fl_dir": str(tmp_path)})
+    assert r["ok"] is False and r["other_drive"] is True and launched == []
+
+
+def test_fl_data_system_dir_prefers_the_running_fl(monkeypatch):
+    monkeypatch.setattr(bridge.midi, "__file__",
+                        r"D:\FL Studio 2026\Shared\Python\Lib\midi.py", raising=False)
+    got = bridge._fl_data_system_dir({"fl_dir": r"C:\Program Files\Image-Line\FL Studio 2024"})
+    assert got.replace("\\", "/").endswith("FL Studio 2026/Data/System")
+
+
+def test_parse_amount_handles_units_and_infinity():
+    parse = bridge._parse_amount
+    assert parse("-6.0 dB") == (-6.0, "db")
+    assert parse("2.5 kHz") == (2500.0, "hz")
+    assert parse("440Hz") == (440.0, "hz")
+    assert parse("120 ms")[1] == "s" and abs(parse("120 ms")[0] - 0.12) < 1e-9
+    assert parse("30%") == (30.0, "%")
+    assert parse("-inf dB") == (float("-inf"), "db")
+    assert parse("Off") is None
+
+
+def _fake_param(monkeypatch, display):
+    state = {"v": 0.5}
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: True)
+    monkeypatch.setattr(bridge.plugins, "getParamValue", lambda *a: state["v"])
+    monkeypatch.setattr(bridge.plugins, "setParamValue", lambda v, *a: state.update(v=v))
+    monkeypatch.setattr(bridge, "_param_value_string", lambda *a: display(state["v"]))
+    return state
+
+
+def test_set_param_value_finds_the_display_value(monkeypatch):
+    # A descending, non-linear dB curve with -inf at the bottom.
+    def display(v):
+        return "-inf dB" if v >= 0.999 else "%.2f dB" % (12 - 60 * v ** 2)
+    state = _fake_param(monkeypatch, display)
+    r = bridge._HANDLERS["plugins.setParamValue"]({"index": 0, "param": 3, "target": "-6 dB"})
+    assert r["verified"] is True and r["clamped"] is False
+    assert abs((12 - 60 * state["v"] ** 2) + 6) < 0.05
+    r = bridge._HANDLERS["plugins.setParamValue"]({"index": 0, "param": 3, "target": "+20 dB"})
+    assert r["clamped"] is True and state["v"] == 0.0
+
+
+def test_set_param_value_restores_non_numeric_parameters(monkeypatch):
+    state = _fake_param(monkeypatch, lambda v: "Sine" if v < 0.5 else "Saw")
+    r = bridge._HANDLERS["plugins.setParamValue"]({"index": 0, "param": 1, "target": "50%"})
+    assert r["ok"] is False and state["v"] == 0.5
+    with pytest.raises(ValueError, match="target must be a number"):
+        bridge._HANDLERS["plugins.setParamValue"]({"index": 0, "param": 1, "target": "loud"})
+
+
+def test_set_param_value_rejects_other_units(monkeypatch):
+    state = _fake_param(monkeypatch, lambda v: "%.0f Hz" % (20 + 19980 * v))
+    r = bridge._HANDLERS["plugins.setParamValue"]({"index": 0, "param": 1, "target": "-3 dB"})
+    assert r["ok"] is False and state["v"] == 0.5
+    r = bridge._HANDLERS["plugins.setParamValue"]({"index": 0, "param": 1, "target": "1.2 kHz"})
+    assert r["verified"] is True
+
+
+def test_fader_law_matches_fl():
+    # Measured on FL 26.1.7: position -> dB shown by FL.
+    for v, db in [(0.05, -35.827), (0.25, -19.050), (0.5, -9.179), (0.8, 0.0), (1.0, 5.590)]:
+        assert abs(bridge._fader_db(v) - db) < 0.002
+        assert abs(bridge._fader_position(db) - v) < 1e-4
+
+
+def test_mixer_set_volume_db_uses_the_fader_law(monkeypatch):
+    set_to = []
+    monkeypatch.setattr(bridge.mixer, "setTrackVolume", lambda tr, v, *a: set_to.append(v))
+    r = bridge._HANDLERS["mixer.setVolumeDb"]({"track": 1, "db": -6})
+    assert abs(r["expected_db"] + 6) < 0.01 and r["clamped"] is False
+    r = bridge._HANDLERS["mixer.setVolumeDb"]({"track": 1, "db": 12})
+    assert r["volume"] == 1.0 and r["clamped"] is True
+    r = bridge._HANDLERS["mixer.setVolumeDb"]({"track": 1, "db": float("-inf")})
+    assert r["volume"] == 0.0 and r["expected_db"] is None
+    assert set_to[-1] == 0.0

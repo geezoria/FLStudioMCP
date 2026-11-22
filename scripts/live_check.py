@@ -27,7 +27,8 @@ from mcp.client import Client
 from fl_studio_mcp.server import build_app
 
 SKIP_PREFIXES = ("voice_", "audio_", "song_")  # need a microphone or audio files
-SKIP_READS = {"piano_roll_read"}  # needs a channel; checked in piano_roll()
+SKIP_READS = {"piano_roll_read",  # needs a channel; checked in piano_roll()
+              "mixer_peak_watch"}  # plays for 8 s by default; checked with 1 s in reads()
 NOT_SUPPORTED = ("not exposed", "not available", "not supported", "requires fl studio",
                  "fl studio 2026", "unsupported")
 
@@ -91,6 +92,7 @@ async def reads(c: Check) -> dict[str, dict]:
     for name, args in [
         ("channel_info", {"index": 0}), ("channel_get_step_sequence", {"index": 0}),
         ("channel_get_grid_bit", {"index": 0, "position": 0}),
+        ("mixer_peak_watch", {"seconds": 1}),
         ("mixer_track_info", {"track": 1}), ("mixer_get_eq", {"track": 1}),
         ("mixer_fx_slots", {"track": 0}), ("plugin_list_mixer_track", {"track": 0}),
         ("playlist_track_info", {"track": 1}), ("pattern_find_by_name", {"name": "Pattern 1"}),
@@ -156,6 +158,9 @@ async def writes(c: Check, seen: dict[str, dict]) -> None:
         await restored(c, "channel_set_step_sequence", {"index": 0, "steps": [1, 0] * 8},
                        {"index": 0, "steps": steps})
 
+    # mixer_set_volume runs next and puts the fader back exactly.
+    await restored(c, "mixer_set_volume_db", {"track": 1, "db": -6.0}, {"track": 1, "db": 0.0},
+                   lambda: _near(mixer("volume_db"), -6.0, 0.05))
     await restored(c, "mixer_set_volume", {"track": 1, "volume": 0.6},
                    {"track": 1, "volume": mx["volume"]}, lambda: _near(mixer("volume"), 0.6))
     await restored(c, "mixer_set_pan", {"track": 1, "pan": -0.4}, {"track": 1, "pan": mx["pan"]})

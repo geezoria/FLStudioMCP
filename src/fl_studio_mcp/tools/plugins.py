@@ -13,7 +13,7 @@ def register(tools: ToolRegistrar) -> None:
     def plugin_search(
         query: str = "", kind: Literal["effect", "generator", "any"] = "effect", limit: int = 50,
     ) -> dict[str, Any]:
-        """Search FL's Plugin database (Fruity plugins plus every VST/VST3/AU the Plugin Manager scanned)
+        """Search FL's Plugin database (FL's own plugins plus every plugin its Plugin Manager scanned)
         by name or category words, e.g. "reverb", "limiter", "fabfilter". Pass a returned `name` to
         `mixer_load_effect`. Reads files on this computer; FL doesn't need to answer."""
         from ..plugin_database import search
@@ -60,6 +60,18 @@ def register(tools: ToolRegistrar) -> None:
         """Set a single parameter (0.0..1.0 normalised)."""
         return get_client().call("plugins.setParam",
                                  index=index, param=param, value=value,
+                                 slot=slot, location=location)
+
+    @tools.write("Set Plugin Parameter in Real Units", idempotent=True)
+    def plugin_set_param_value(index: int, param: int, target: str,
+                               slot: int = -1, location: Literal["channel", "mixer"] = "channel") -> dict[str, Any]:
+        """Set a parameter to the value FL displays, in its own units: "-6 dB", "2.5 kHz", "120 ms",
+        "30%" or a bare number. FL searches the normalized value whose display text matches and
+        reports `value_string`, `verified` (within 1 %) and `clamped` (target outside the
+        parameter's `range`). Stepped or non-numeric parameters come back `verified: false`;
+        use plugin_set_param for those."""
+        return get_client().call("plugins.setParamValue",
+                                 index=index, param=param, target=target,
                                  slot=slot, location=location)
 
     @tools.read("Find Plugin Parameters by Name")

@@ -25,7 +25,7 @@ def default_toolsets(monkeypatch):
 def test_build_app():
     app = build_app()
     tools = run(app.list_tools)
-    assert len(tools) == 172
+    assert len(tools) == 176
     names = {t.name for t in tools}
     # Spot-check coverage across every module
     for required in [
@@ -74,7 +74,7 @@ def test_mcp_discovery_and_pure_tool():
             assert client.server_info.website_url == "https://github.com/geezoria/FLStudioMCP"
 
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-            assert len(tools) == 172
+            assert len(tools) == 176
             for tool in tools.values():
                 assert tool.title and tool.title.strip()
                 assert tool.description and tool.description.strip()
@@ -121,7 +121,7 @@ def test_mcp_prompts_list_and_render():
             {"path": r"C:\Music\Example track.wav"},
             (r"C:\Music\Example track.wav", "audio_analyze", "song_to_dnb_flip", "piano_roll_read"),
         ),
-        "mix_check": ({}, ("read-only", "mixer_get_eq", "agreement before changing")),
+        "mix_check": ({}, ("read-only", "mixer_diagnose", "agreement before changing")),
         "project_overview": ({}, ("read-only", "project_metadata", "transport_status")),
     }
 
@@ -149,11 +149,11 @@ def test_mcp_prompts_list_and_render():
          {"fl_call_raw", "voice_to_piano_roll", "mixer_set_eq_band", "project_save"}),
         ("core", "", 27, {"transport_tap_tempo", "project_undo", "project_save"},
          {"project_render", "channel_all"}),
-        (" patterns, MIXER ", "", 38, {"pattern_list", "mixer_get_eq"},
+        (" patterns, MIXER ", "", 41, {"pattern_list", "mixer_get_eq"},
          {"fl_bridge_info", "channel_all", "transport_play"}),
         ("core, patterns", "project_save, pattern_list", 39, {"pattern_create", "transport_play"},
          {"project_save", "pattern_list"}),
-        ("all", "fl_ping, gen_chord_notes", 170, {"channel_all"}, {"fl_ping", "gen_chord_notes"}),
+        ("all", "fl_ping, gen_chord_notes", 174, {"channel_all"}, {"fl_ping", "gen_chord_notes"}),
     ],
 )
 def test_toolset_selection(monkeypatch, selection, disabled, count, present, absent):

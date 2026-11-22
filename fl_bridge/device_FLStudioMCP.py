@@ -11,7 +11,9 @@ The companion ComposeWithLLM.pyscript handles piano-roll file requests separatel
 """
 
 import json
+import math
 import os
+import re
 import sys
 import time
 import traceback
@@ -43,7 +45,7 @@ except ImportError:  # pragma: no cover - exercised only outside FL Studio
 # Configuration
 # ----------------------------------------------------------------------------
 
-BRIDGE_VERSION = "0.4.0"
+BRIDGE_VERSION = "0.5.0"
 PROTOCOL = 2
 MAX_COMMAND_BYTES = 16 * 1024 * 1024
 MAX_BATCH_ACTIONS = 32
@@ -1207,31 +1209,34 @@ def h_mixer_set_slot(p):
         else:
             general.processRECEvent(_slot_event(tr, slot, "REC_Plug_MixLevel"),
                                     int(round(mix * midi.FromMIDI_Max)), flags)
-    # FL applies a new mix level after this callback returns, so a read here
-    # would show the old one: report the value that was set.
+    # FL applies new slot values after this callback returns, so a read here
+    # could show the old ones: report the values that were set.
     return {"track": tr, "slot": slot, "name": plugins.getPluginName(tr, slot, 0, False),
-            "enabled": _slot_enabled(tr, slot), "mix": _slot_mix(tr, slot) if mix is None else mix}
+            "enabled": _slot_enabled(tr, slot) if enabled is None else bool(enabled),
+            "mix": _slot_mix(tr, slot) if mix is None else mix}
 
 
 def h_mixer_set_slots_enabled(p):
     """The track's "enable effects slots" switch, which bypasses all 10 slots at once."""
     tr = _mixer_track(p["track"])
-    mixer.enableTrackSlots(tr, bool(p.get("enabled", True)))
-    return {"track": tr, "slots_enabled": _bool_or_none(_safe(mixer.isTrackSlotsEnabled, tr))}
+    enabled = bool(p.get("enabled", True))
+    mixer.enableTrackSlots(tr, enabled)
+    return {"track": tr, "slots_enabled": enabled}
 
 
 def _fl_data_system_dir(p):
     """FL's Data/System folder: launchAudioEditor takes presets relative to it."""
-    root = p.get("fl_dir")
-    if not root:
-        # midi.py lives in <FL Studio>/Shared/Python/Lib. Split the path as a
-        # string: the sandbox has no os.stat, so no isdir() probing.
-        midi_file = getattr(midi, "__file__", None)
-        parts = os.path.abspath(midi_file).replace("\\", "/").split("/") if midi_file else []
-        if "Shared" not in parts:
-            return None
+    # midi.py lives in <FL Studio>/Shared/Python/Lib of the FL that runs this
+    # script. Split the path as a string: the sandbox has no os.stat, so no
+    # isdir() probing. The server's fl_dir (from the registry, which every
+    # installed FL version shares) is only the fallback.
+    midi_file = getattr(midi, "__file__", None)
+    parts = os.path.abspath(midi_file).replace("\\", "/").split("/") if midi_file else []
+    if "Shared" in parts:
         root = "/".join(parts[:len(parts) - 1 - parts[::-1].index("Shared")])
-    return os.path.join(root, "Data", "System")
+    else:
+        root = p.get("fl_dir")
+    return os.path.join(root, "Data", "System") if root else None
 
 
 def h_mixer_load_effect(p):
@@ -1255,7 +1260,11 @@ def h_mixer_load_effect(p):
     try:
         relative = os.path.relpath(preset, data_system)
     except ValueError:
-        raise ValueError("the preset must be on the same drive as FL Studio") from None
+        # FL only takes a path relative to Data/System, and none reaches another
+        # drive. The server copies the preset to FL's drive and asks again.
+        return {"ok": False, "track": tr, "other_drive": True, "data_system": data_system,
+                "error": "the preset is on another drive than FL Studio",
+                "hint": "copy the .fst to the drive FL Studio is installed on"}
     ui.launchAudioEditor(False, "", tr, relative, "")
     after = _slot_names(tr)
     loaded = [{"slot": s, "name": name} for s, name in sorted(after.items()) if before.get(s) != name]
@@ -1281,6 +1290,65 @@ def h_mixer_peaks(p):
             continue
         out.append({"track": tr, "name": mixer.getTrackName(tr), "left": left, "right": right})
     return {"tracks": out, "playing": bool(_safe(transport.isPlaying))}
+
+
+# FL's fader law, which fits FL 26.1.7's dB readout within 0.001 dB: the linear gain is
+# (e^(kv) - 1) / (e^(0.8k) - 1) with k = 2.9974 for a fader position v in 0..1,
+# so 0.8 is 0 dB and 1.0 is about +5.6 dB.
+_FADER_CURVE = 2.9974
+_FADER_UNITY = 0.8
+
+
+def _fader_db(v):
+    unity = math.exp(_FADER_CURVE * _FADER_UNITY) - 1.0
+    gain = (math.exp(_FADER_CURVE * v) - 1.0) / unity
+    return 20.0 * math.log10(gain) if gain > 0 else float("-inf")
+
+
+def _fader_position(db):
+    unity = math.exp(_FADER_CURVE * _FADER_UNITY) - 1.0
+    return math.log(1.0 + (10.0 ** (db / 20.0)) * unity) / _FADER_CURVE
+
+
+def h_mixer_set_volume_db(p):
+    """Set a fader to a level in dB. FL's dB readback lags within a callback, so the
+    position comes from the fader law and the server reads the result back."""
+    tr = _mixer_track(p["track"])
+    want = float(p["db"])
+    if math.isnan(want):
+        raise ValueError("db must be a number")
+    top = _fader_db(1.0)
+    v = 0.0 if want == float("-inf") else min(1.0, _fader_position(min(want, top)))
+    mixer.setTrackVolume(tr, v)
+    return {"track": tr, "volume": v, "expected_db": round(_fader_db(v), 2) if v > 0 else None,
+            "clamped": want > top + 0.005}
+
+
+def h_mixer_snapshot(p):
+    """Everything a mix review needs, in one callback: every track's fader, peaks, sends and
+    FX slots, plus which insert each channel feeds."""
+    top = int(_safe(mixer.trackCount) or 127) - 2
+    left_mode = getattr(midi, "PEAK_L", 0)
+    right_mode = getattr(midi, "PEAK_R", 1)
+    can_route = hasattr(mixer, "getRouteSendActive")
+    tracks = []
+    for tr in range(top + 1):
+        info = _mx_info(tr)
+        info["peak"] = max(float(_safe(mixer.getTrackPeaks, tr, left_mode) or 0.0),
+                           float(_safe(mixer.getTrackPeaks, tr, right_mode) or 0.0))
+        info["sends"] = ([dst for dst in range(top + 1) if dst != tr and _safe(mixer.getRouteSendActive, tr, dst)]
+                         if can_route and tr != 0 else None)
+        info["slots"] = [{"slot": s, "name": name, "enabled": _slot_enabled(tr, s)}
+                         for s, name in sorted(_slot_names(tr).items())]
+        info["slots_enabled"] = _bool_or_none(_safe(mixer.isTrackSlotsEnabled, tr))
+        tracks.append(info)
+    chans = []
+    for i in range(channels.channelCount(True)):
+        chans.append({"index": i, "name": _safe(channels.getChannelName, i, True),
+                      "fx_track": _safe(channels.getTargetFxTrack, i, True),
+                      "muted": bool(_safe(channels.isChannelMuted, i, True))})
+    return {"tracks": tracks, "channels": chans, "playing": bool(_safe(transport.isPlaying)),
+            "routing_known": can_route}
 
 
 def h_mixer_select(p):
@@ -1358,6 +1426,64 @@ def _param_value_string(param, idx, slot, ug):
         return plugins.getParamValueString(param, idx, slot, ug)
 
 
+# --- real-unit values: "-6 dB", "2.5 kHz", "120 ms", "30%" ---------------------
+
+_AMOUNT_RE = re.compile(r"([-+]?(?:inf|∞|\d+(?:\.\d*)?|\.\d+))\s*([a-z%]*)")
+_UNIT_BASE = {"khz": ("hz", 1000.0), "hz": ("hz", 1.0), "ms": ("s", 0.001), "s": ("s", 1.0),
+              "sec": ("s", 1.0), "db": ("db", 1.0), "%": ("%", 1.0), "st": ("st", 1.0),
+              "semitones": ("st", 1.0), "cents": ("cents", 1.0), "ct": ("cents", 1.0)}
+
+
+def _parse_amount(text):
+    """'-6.0 dB' -> (-6.0, 'db'), '2.5 kHz' -> (2500.0, 'hz'), '120 ms' -> (0.12, 's'),
+    '-inf dB' -> (-inf, 'db'). Units FL shows that aren't listed keep their own name.
+    None when the text has no number (e.g. "Off")."""
+    if text is None:
+        return None
+    s = str(text).strip().lower().replace("−", "-").replace(",", ".")
+    m = _AMOUNT_RE.search(s)
+    if not m:
+        return None
+    num, unit = m.group(1), m.group(2)
+    if "inf" in num or "∞" in num:
+        value = float("-inf") if num.startswith("-") else float("inf")
+    else:
+        value = float(num)
+    base, scale = _UNIT_BASE.get(unit, (unit, 1.0))
+    return value * scale, base
+
+
+def _bisect_control(probe, want, steps=40):
+    """Find the normalized 0..1 value whose reading (probe(v) -> float or None) is closest
+    to `want`, assuming the reading moves monotonically with v. Returns (value, reading, clamped)."""
+    low, high = probe(0.0), probe(1.0)
+    if low is None or high is None:
+        return None
+    ascending = high >= low
+    if (want <= low) == ascending or want == low:
+        return 0.0, low, want != low
+    if (want >= high) == ascending or want == high:
+        return 1.0, high, want != high
+    lo, hi = 0.0, 1.0
+    for _ in range(steps):
+        mid = (lo + hi) / 2.0
+        reading = probe(mid)
+        if reading is None:
+            break
+        if (reading < want) == ascending:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < 1e-7:
+            break
+    best = min((lo, hi), key=lambda v: abs((probe(v) or 0.0) - want))
+    return best, probe(best), False
+
+
+def _close_enough(got, want):
+    return got is not None and abs(got - want) <= max(0.05, abs(want) * 0.01)
+
+
 def h_plugins_is_valid(p):
     idx, slot, ug = _resolve_plugin_loc(p)
     return {"valid": plugins.isValid(idx, slot, ug) == 1}
@@ -1428,6 +1554,45 @@ def h_plugins_set_param(p):
         "value": v,
         "value_string": _param_value_string(pid, idx, slot, ug),
     }
+
+
+def h_plugins_set_param_value(p):
+    """Set a parameter to a real-unit value ("-6 dB", "2.5 kHz", "30%") by searching the
+    normalized value whose display text matches. FL's display string updates inside the
+    callback, so the whole search runs in this one call."""
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
+    pid = int(p["param"])
+    want = _parse_amount(p.get("target"))
+    if want is None or want[0] in (float("inf"), float("-inf")):
+        raise ValueError("target must be a number with an optional unit, e.g. '-6 dB', '2.5 kHz', "
+                         "'120 ms' or '30%%' (got %r)" % (p.get("target"),))
+    original = plugins.getParamValue(pid, idx, slot, ug)
+    shown = {}
+
+    def read(v):
+        plugins.setParamValue(v, pid, idx, slot, 0, ug)
+        text = _param_value_string(pid, idx, slot, ug)
+        shown[v] = text
+        amount = _parse_amount(text)
+        if amount is None or (want[1] and amount[1] and amount[1] != want[1]):
+            return None
+        return amount[0]
+
+    found = _bisect_control(read, want[0])
+    if found is None:
+        plugins.setParamValue(original, pid, idx, slot, 0, ug)
+        return {"ok": False, "error": "parameter shows %r and %r at its ends, not a number in %r"
+                % (shown.get(0.0), shown.get(1.0), want[1] or "any unit"),
+                "hint": "Read it with plugin_get_param and set a normalized value with plugin_set_param."}
+    value, reading, clamped = found
+    plugins.setParamValue(value, pid, idx, slot, 0, ug)
+    return {"value": value, "value_string": _param_value_string(pid, idx, slot, ug),
+            "target": p.get("target"), "clamped": clamped,
+            "verified": _close_enough(reading, want[0]),
+            "range": [shown.get(0.0), shown.get(1.0)]}
 
 
 def h_plugins_find_param(p):
@@ -2309,6 +2474,8 @@ _HANDLERS = {
     "mixer.setSlotsEnabled": h_mixer_set_slots_enabled,
     "mixer.loadEffect": h_mixer_load_effect,
     "mixer.peaks": h_mixer_peaks,
+    "mixer.snapshot": h_mixer_snapshot,
+    "mixer.setVolumeDb": h_mixer_set_volume_db,
     "mixer.select": h_mixer_select,
     "mixer.getEQ": h_mixer_get_eq,
     "mixer.setEQBand": h_mixer_set_eq_band,
@@ -2320,6 +2487,7 @@ _HANDLERS = {
     "plugins.params": h_plugins_params,
     "plugins.getParam": h_plugins_get_param,
     "plugins.setParam": h_plugins_set_param,
+    "plugins.setParamValue": h_plugins_set_param_value,
     "plugins.findParam": h_plugins_find_param,
     "plugins.presetCount": h_plugins_preset_count,
     "plugins.nextPreset": h_plugins_next_preset,

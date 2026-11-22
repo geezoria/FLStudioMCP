@@ -31,7 +31,7 @@ class PluginEntry:
 
 def _display_name(stem: str) -> str:
     # The Plugin Manager suffixes some 64-bit builds: "Fruity Reeverb 2_x64", "Foo (x64)".
-    return re.sub(r"[ _]?\(?x64\)?$", "", stem, flags=re.IGNORECASE).strip()
+    return re.sub(r"(?:[ _]x64|\s*\(x64\))$", "", stem, flags=re.IGNORECASE).strip()
 
 
 def list_plugins(root: Path | None = None) -> list[PluginEntry]:
@@ -51,14 +51,15 @@ def list_plugins(root: Path | None = None) -> list[PluginEntry]:
     return sorted(entries.values(), key=lambda e: (e.kind, e.name.lower()))
 
 
-def search(query: str = "", kind: str | None = None, root: Path | None = None) -> list[PluginEntry]:
-    """Plugins whose name or category contains every word of `query` (case-insensitive)."""
+def search(query: str = "", kind: str | None = None, root: Path | None = None,
+           names_only: bool = False) -> list[PluginEntry]:
+    """Plugins whose name (or category) contains every word of `query` (case-insensitive)."""
     words = query.lower().split()
     found = []
     for entry in list_plugins(root):
         if kind and entry.kind != kind:
             continue
-        haystack = f"{entry.name} {entry.category}".lower()
+        haystack = entry.name.lower() if names_only else f"{entry.name} {entry.category}".lower()
         if all(w in haystack for w in words):
             found.append(entry)
     return found
@@ -67,11 +68,11 @@ def search(query: str = "", kind: str | None = None, root: Path | None = None) -
 def resolve(name: str, kind: str = "effect", root: Path | None = None) -> PluginEntry:
     """The one plugin `name` refers to: an exact name, else a unique partial match."""
     if name.lower().endswith(".fst"):
-        path = Path(name).expanduser()
+        path = Path(name).expanduser().resolve()
         if not path.is_file():
             raise ValueError(f"preset not found: {path}")
         return PluginEntry(_display_name(path.stem), kind, "", path)
-    candidates = search(name, kind, root)
+    candidates = search(name, kind, root, names_only=True)
     exact = [e for e in candidates if e.name.lower() == name.strip().lower()]
     if exact:
         return exact[0]
