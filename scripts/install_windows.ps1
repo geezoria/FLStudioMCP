@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Install fLMCP from a git checkout (developers). End users: `uvx flmcp install`.
+    Install fLMCP from a git checkout (developers). End users: `uvx flmcp-studio install`.
 
 .DESCRIPTION
     Creates .venv, installs the package (editable) with the chosen extras and

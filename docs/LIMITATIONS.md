@@ -148,7 +148,7 @@ error: "...not available"}` rather than raising.
   it pins `tensorflow<2.15.1`, which has no Python 3.12 build. fLMCP installs it
   with `--no-deps` and runs inference on the **ONNX** runtime (no TensorFlow).
   Use `install_windows.ps1 -Polyphonic`, or:
-  `pip install "flmcp[polyphonic]"` then `pip install basic-pitch --no-deps`.
+  `pip install "flmcp-studio[polyphonic]"` then `pip install basic-pitch --no-deps`.
   When Basic Pitch is absent, `polyphonic=True` returns a structured install
   hint and the monophonic engine still works.
 

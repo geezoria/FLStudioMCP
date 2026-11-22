@@ -1,5 +1,5 @@
 [project]
-name = "flmcp"
+name = "flmcp-studio"
 version = "0.4.0"
 description = "The most complete MCP server for FL Studio 2024–2026: let Claude and other AI assistants compose, arrange and mix in FL Studio — 160+ tools, piano-roll writing, voice-to-MIDI and audio analysis."
 requires-python = ">=3.10"
@@ -30,7 +30,7 @@ dependencies = [
 # Heavy, optional dependencies. The core MCP server (transport, mixer, channels,
 # plugins, patterns, piano roll, generators) runs WITHOUT any of these — they are
 # imported lazily, only when a voice-to-MIDI or audio-analysis tool is actually
-# called. Install with:  pip install "flmcp[audio]"
+# called. Install with:  pip install "flmcp-studio[audio]"
 [project.optional-dependencies]
 audio = [
     "numpy>=1.23",
@@ -77,6 +77,7 @@ Changelog = "https://github.com/geezoria/FLStudioMCP/blob/main/CHANGELOG.md"
 
 [project.scripts]
 flmcp = "fl_studio_mcp.cli:main"
+flmcp-studio = "fl_studio_mcp.cli:main"  # so `uvx flmcp-studio` finds a command
 fl-studio-mcp = "fl_studio_mcp.cli:main"  # legacy alias
 
 [build-system]

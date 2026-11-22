@@ -17,7 +17,7 @@ def test_bundled_bridge_scripts_found():
 def test_server_command_modes():
     cmd, args = cli.server_command("python")
     assert args == ["-m", "fl_studio_mcp"]
-    assert cli.server_command("uvx") == ("uvx", ["flmcp"])
+    assert cli.server_command("uvx") == ("uvx", ["flmcp-studio"])
 
 
 def test_write_client_config_merges_and_replaces_legacy(tmp_path):
@@ -55,8 +55,8 @@ def test_invalid_client_json_is_left_alone(tmp_path):
 
 
 def test_config_snippets_cover_clients():
-    text = cli.config_snippets("uvx", ["flmcp"])
-    assert "claude mcp add --scope user flmcp -- uvx flmcp" in text
+    text = cli.config_snippets("uvx", ["flmcp-studio"])
+    assert "claude mcp add --scope user flmcp -- uvx flmcp-studio" in text
     assert "[mcp_servers.flmcp]" in text
 
 

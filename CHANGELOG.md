@@ -12,9 +12,11 @@ command.
 
 ### Breaking
 
-- **The PyPI distribution is now `flmcp`.** `fl-studio-mcp` on PyPI belongs to a
-  different project. The import package (`fl_studio_mcp`) and the legacy
-  `fl-studio-mcp` console script stay. The MCP client entry is renamed to
+- **The PyPI distribution is now `flmcp-studio`.** `fl-studio-mcp` on PyPI belongs
+  to a different project, and PyPI rejects `flmcp` as too similar to `f1-mcp`.
+  Install with `uvx flmcp-studio install`. The command is `flmcp` (plus a
+  `flmcp-studio` alias for uvx). The import package (`fl_studio_mcp`) and the
+  legacy `fl-studio-mcp` command stay. The MCP client entry is renamed to
   `flmcp`, and `flmcp install` removes the old `fl-studio-mcp` entries.
 - **The TCP bridge is gone.** FL Studio 2025/2026 run controller scripts in a
   sandboxed sub-interpreter without threads or sockets (#1). The bridge now
@@ -46,7 +48,7 @@ command.
     assignment, FL process, heartbeat, live ping and version mismatch.
   - `flmcp config` prints per-client snippets, including Codex.
   - `flmcp uninstall` removes everything again.
-  - Running `flmcp` with no arguments starts the server, so `uvx flmcp` just
+  - Running `flmcp` with no arguments starts the server, so `uvx flmcp-studio` just
     works.
 - **The FL scripts ship inside the wheel**, so installing from PyPI/uvx needs no
   git clone.
@@ -191,7 +193,7 @@ command.
     `tensorflow<2.15.1`, which has no 3.12 build). fLMCP installs Basic Pitch
     with `--no-deps` and runs inference on the **ONNX** runtime instead (no
     TensorFlow). The installer's `-Polyphonic` switch does this automatically;
-    manual users run `pip install "fl-studio-mcp[polyphonic]"` (now `flmcp[polyphonic]`) then
+    manual users run `pip install "fl-studio-mcp[polyphonic]"` (now `flmcp-studio[polyphonic]`) then
     `pip install basic-pitch --no-deps`.
 - Tools now report which `engine` produced the notes.
 

@@ -29,4 +29,4 @@ def test_mcpb_bundle_matches_release():
     assert (ROOT / "mcpb" / manifest["server"]["entry_point"]).is_file()
     pyproject = (ROOT / "mcpb" / "pyproject.toml").read_text(encoding="utf-8")
     assert _toml_version(ROOT / "mcpb" / "pyproject.toml") == __version__
-    assert f'"flmcp=={__version__}"' in pyproject
+    assert f'"flmcp-studio=={__version__}"' in pyproject

@@ -3,8 +3,8 @@
 <!-- mcp-name: io.github.geezoria/flmcp -->
 
 [![CI](https://github.com/geezoria/FLStudioMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/geezoria/FLStudioMCP/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/flmcp.svg)](https://pypi.org/project/flmcp/)
-[![Python](https://img.shields.io/pypi/pyversions/flmcp.svg)](https://pypi.org/project/flmcp/)
+[![PyPI](https://img.shields.io/pypi/v/flmcp-studio.svg)](https://pypi.org/project/flmcp-studio/)
+[![Python](https://img.shields.io/pypi/pyversions/flmcp-studio.svg)](https://pypi.org/project/flmcp-studio/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Let Claude, Cursor, VS Code Copilot, Codex — any [MCP](https://modelcontextprotocol.io)
@@ -23,7 +23,7 @@ was clicked by hand.</sub>
 - **Works in FL Studio 2025 and 2026's sandboxed Python.** No sockets or threads
   inside FL — a file transport with an optional MIDI wake-up (see
   [Architecture](#architecture)).
-- **One-command setup:** `uvx flmcp install` copies the FL scripts, wires the
+- **One-command setup:** `uvx flmcp-studio install` copies the FL scripts, wires the
   MIDI port and registers the server with your AI apps. `flmcp doctor` tells
   you exactly what is wrong when something is.
 - **Toolsets** keep the tool list small for clients with tool limits
@@ -42,7 +42,7 @@ Python 3.10+.
 **1. Install** — close FL Studio first, then:
 
 ```powershell
-uvx flmcp install
+uvx flmcp-studio install
 ```
 
 This:
@@ -61,7 +61,7 @@ This:
    VS Code** where it finds them (existing configs are backed up to
    `*.flmcp.bak`). Limit it with `--client cursor`, or skip with `--no-clients`.
 
-**2. Start FL Studio.** The bridge loads with FL; `uvx flmcp doctor` should say
+**2. Start FL Studio.** The bridge loads with FL; `uvx flmcp-studio doctor` should say
 *All good*.
 
 If FL was running during the install (FL rewrites its MIDI settings on exit, so
@@ -79,7 +79,7 @@ tool says the edits are queued.
 **3. Restart your AI app and say *"ping FL Studio"*.** If it can't connect:
 
 ```powershell
-uvx flmcp doctor
+uvx flmcp-studio doctor
 ```
 
 ### Claude Desktop: one-click bundle
@@ -89,18 +89,18 @@ Each [release](https://github.com/geezoria/FLStudioMCP/releases) has a
 Extensions* in Claude Desktop) to add the server without editing any config.
 Claude Desktop runs it with uv and lets you pick the tool groups and the
 timeout in the extension's settings. You still need the FL side once: close
-FL Studio, run `uvx flmcp install --no-clients`, and start FL again. To build
+FL Studio, run `uvx flmcp-studio install --no-clients`, and start FL again. To build
 the bundle yourself: `npx @anthropic-ai/mcpb pack mcpb`.
 
 ### Other clients / manual config
 
-`uvx flmcp config` prints ready-to-paste snippets for every client. The
+`uvx flmcp-studio config` prints ready-to-paste snippets for every client. The
 canonical entry is:
 
 ```json
 {
   "mcpServers": {
-    "flmcp": { "command": "uvx", "args": ["flmcp"] }
+    "flmcp": { "command": "uvx", "args": ["flmcp-studio"] }
   }
 }
 ```
@@ -108,12 +108,12 @@ canonical entry is:
 | Client | Where |
 | --- | --- |
 | Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` → `mcpServers` |
-| Claude Code | `claude mcp add --scope user flmcp -- uvx flmcp` |
+| Claude Code | `claude mcp add --scope user flmcp -- uvx flmcp-studio` |
 | Cursor | `~/.cursor/mcp.json` → `mcpServers` |
 | VS Code | `%APPDATA%\Code\User\mcp.json` → `servers` (with `"type": "stdio"`) |
-| Codex CLI | `~/.codex/config.toml` → `[mcp_servers.flmcp]` `command = "uvx"`, `args = ["flmcp"]` |
+| Codex CLI | `~/.codex/config.toml` → `[mcp_servers.flmcp]` `command = "uvx"`, `args = ["flmcp-studio"]` |
 
-Without uv: `pip install flmcp`, then use `"command": "python", "args": ["-m", "fl_studio_mcp"]`
+Without uv: `pip install flmcp-studio`, then use `"command": "python", "args": ["-m", "fl_studio_mcp"]`
 (`flmcp install --command python` writes that for you).
 
 ## What you can ask for
@@ -178,7 +178,7 @@ groups at startup with environment variables:
 what is enabled.
 
 ```json
-"flmcp": { "command": "uvx", "args": ["flmcp"], "env": { "FLMCP_TOOLSETS": "lean" } }
+"flmcp": { "command": "uvx", "args": ["flmcp-studio"], "env": { "FLMCP_TOOLSETS": "lean" } }
 ```
 
 ## Optional extras
@@ -188,14 +188,14 @@ sounddevice…). The core server never imports them; the tools return an install
 hint until they are present.
 
 ```powershell
-uvx --from "flmcp[audio,gui]" flmcp install   # or: pip install "flmcp[audio,gui]"
+uvx --from "flmcp-studio[audio,gui]" flmcp install   # or: pip install "flmcp-studio[audio,gui]"
 ```
 
 **Polyphonic transcription** (`polyphonic=True`: chords, strums, full mixes via
 Spotify Basic Pitch on the ONNX runtime):
 
 ```powershell
-pip install "flmcp[polyphonic]"
+pip install "flmcp-studio[polyphonic]"
 pip install basic-pitch --no-deps   # its metadata pins a TensorFlow that has no 3.12 build
 ```
 
@@ -253,15 +253,15 @@ the bridge heartbeat, a live ping and version mismatches.
 
 | Symptom | Fix |
 | --- | --- |
-| `bridge offline` / no heartbeat | FL isn't running or the controller isn't enabled. Close FL and re-run `uvx flmcp install`, or set it by hand: *Options → MIDI Settings → Input*, Controller type **fLMCP Bridge**. Check *View → Script output* for `[fLMCP]` lines. |
+| `bridge offline` / no heartbeat | FL isn't running or the controller isn't enabled. Close FL and re-run `uvx flmcp-studio install`, or set it by hand: *Options → MIDI Settings → Input*, Controller type **fLMCP Bridge**. Check *View → Script output* for `[fLMCP]` lines. |
 | Calls time out or run twice | Doctor warns about several FL instances: they share the bridge folder and race for commands. Close all but one. |
 | Calls time out while FL shows a dialog | A modal dialog (save prompt, plugin error, "Confirm") blocks FL's UI thread and the bridge with it. Close the dialog. |
-| Doctor says the script is outdated | `uvx flmcp install`, then restart FL (or *MIDI Settings → Update scripts*). |
+| Doctor says the script is outdated | `uvx flmcp-studio install`, then restart FL (or *MIDI Settings → Update scripts*). |
 | Commands are slow (~0.5–1 s) | Install loopMIDI and re-run `flmcp install` so the MIDI wake port exists. |
 | Piano-roll edits don't apply | Pass `channel` so the tool opens that piano roll, and close any FL dialog. The result's `note` says why the script didn't run. As a last resort run *Tools → Scripts → ComposeWithLLM* in the piano roll yourself. |
 | `playlist_place_pattern` returns an error | FL's API doesn't expose clip placement — see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). |
 | `voice_*` / `audio_*` say a module is missing | Install the `[audio]` extra. |
-| Upgrading from 0.3 (`fl-studio-mcp`) | `uvx flmcp install` replaces the old `fl-studio-mcp` client entries and the old TCP bridge script. |
+| Upgrading from 0.3 (`fl-studio-mcp`) | `uvx flmcp-studio install` replaces the old `fl-studio-mcp` client entries and the old TCP bridge script. |
 
 ## Development
 
