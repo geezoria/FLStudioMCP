@@ -1,9 +1,9 @@
-"""fl-studio-mcp entry point.
+"""fLMCP MCP server.
 
 Run with:
     python -m fl_studio_mcp
 or:
-    fl-studio-mcp
+    flmcp
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def build_app() -> MCPServer:
         return await call_next(ctx)
 
     mcp = MCPServer(
-        "fl-studio-mcp",
+        "flmcp",
         title="fLMCP — FL Studio MCP",
         description="Compose, edit, mix and inspect FL Studio projects through MCP.",
         website_url="https://github.com/geezoria/FLStudioMCP",
@@ -68,7 +68,7 @@ def build_app() -> MCPServer:
     r_project.register(mcp)
     prompts.register(mcp)
 
-    log.info("fl-studio-mcp initialised")
+    log.info("flmcp %s initialised", __version__)
     return mcp
 
 

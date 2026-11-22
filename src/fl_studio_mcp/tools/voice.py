@@ -83,7 +83,7 @@ def register(tools: ToolRegistrar) -> None:
         except Exception:
             return {"ok": False,
                     "error": "Dear PyGui not installed. Install with: "
-                             "pip install \"fl-studio-mcp[gui]\" (or [audio])."}
+                             "pip install \"flmcp[gui]\" (or [audio])."}
         import subprocess
         import sys as _sys
         try:

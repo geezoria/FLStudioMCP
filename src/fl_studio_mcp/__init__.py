@@ -1,2 +1,2 @@
-"""fl-studio-mcp — MCP server that gives an LLM full control over FL Studio."""
+"""fLMCP — MCP server that lets AI assistants control FL Studio."""
 __version__ = "0.4.0"
