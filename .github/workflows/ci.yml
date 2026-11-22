@@ -56,7 +56,7 @@ jobs:
           uv venv /tmp/wheeltest
           uv pip install --python /tmp/wheeltest dist/*.whl
           /tmp/wheeltest/bin/python -c "import fl_studio_mcp, fl_studio_mcp.server as s; s.build_app(); print(fl_studio_mcp.__version__)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -71,7 +71,7 @@ jobs:
           node-version: 22
       - run: npx -y @anthropic-ai/mcpb validate mcpb/manifest.json
       - run: npx -y @anthropic-ai/mcpb pack mcpb flmcp.mcpb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mcpb
           path: flmcp.mcpb
