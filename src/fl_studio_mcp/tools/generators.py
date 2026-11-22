@@ -8,12 +8,11 @@ drop in a full beat or progression without reasoning about MIDI numbers.
 from __future__ import annotations
 
 import random
-from typing import Literal
-
-from mcp.server.fastmcp import FastMCP
+from typing import Any, Literal
 
 from ..bridge_client import RPCError, get_client
 from ..file_bridge import stage_and_run
+from ._meta import ToolRegistrar
 
 
 def _emit_notes_to_piano_roll(notes_bars: list[dict], clear_first: bool = True,
@@ -21,7 +20,7 @@ def _emit_notes_to_piano_roll(notes_bars: list[dict], clear_first: bool = True,
                               pattern: int | None = None) -> dict:
     """Route notes (in bars) to the piano roll via the file bridge (no MIDI).
 
-    When `channel` is given and the TCP bridge is online, the target channel's
+    When `channel` is given and the controller bridge is online, the target channel's
     piano roll is opened first so the notes land on it.
     """
     actions: list[dict] = []
@@ -165,40 +164,40 @@ DRUM_PATTERNS: dict[str, dict[int, list[int]]] = {
 
 # ---------- registration -----------------------------------------------------
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    def gen_list_scales() -> dict:
+def register(tools: ToolRegistrar) -> None:
+    @tools.read("List Scales")
+    def gen_list_scales() -> dict[str, Any]:
         """Return all supported scale names."""
         return {"scales": list(SCALES.keys())}
 
-    @mcp.tool()
-    def gen_list_chord_qualities() -> dict:
+    @tools.read("List Chord Qualities")
+    def gen_list_chord_qualities() -> dict[str, Any]:
         """Return all supported chord quality names."""
         return {"qualities": list(CHORDS.keys())}
 
-    @mcp.tool()
-    def gen_list_progressions() -> dict:
+    @tools.read("List Chord Progressions")
+    def gen_list_progressions() -> dict[str, Any]:
         """Return all built-in Roman-numeral progressions."""
         return {"progressions": list(COMMON_PROGRESSIONS.keys())}
 
-    @mcp.tool()
-    def gen_list_drum_patterns() -> dict:
+    @tools.read("List Drum Patterns")
+    def gen_list_drum_patterns() -> dict[str, Any]:
         """Return all built-in drum patterns."""
         return {"patterns": list(DRUM_PATTERNS.keys())}
 
-    @mcp.tool()
+    @tools.read("Preview Chord Notes")
     def gen_chord_notes(root: str = "C4",
                        quality: str = "maj",
-                       inversion: int = 0) -> dict:
-        """Return MIDI notes for a single chord (no FL write)."""
+                       inversion: int = 0) -> dict[str, Any]:
+        """Preview MIDI pitches for a chord. Supply a root with octave (e.g. C4) and a quality from gen_list_chord_qualities."""
         root_midi = _parse_root(root)
         return {"notes": _chord_midi(root_midi, quality, inversion)}
 
-    @mcp.tool()
+    @tools.read("Preview Scale Notes")
     def gen_scale_notes(root: str = "C4",
                        scale: str = "minor",
-                       octaves: int = 1) -> dict:
-        """Return MIDI notes for a scale run."""
+                       octaves: int = 1) -> dict[str, Any]:
+        """Preview ascending MIDI pitches for the named scale and octave count, from a root such as C4 to the final octave root."""
         root_midi = _parse_root(root)
         iv = SCALES[scale]
         notes: list[int] = []
@@ -208,7 +207,7 @@ def register(mcp: FastMCP) -> None:
         notes.append(root_midi + 12 * octaves)
         return {"notes": notes}
 
-    @mcp.tool()
+    @tools.write("Write Chord Progression", destructive=True)
     def gen_emit_chord_progression(channel: int,
                                   progression: str = "I-V-vi-IV",
                                   root: str = "C4",
@@ -216,8 +215,8 @@ def register(mcp: FastMCP) -> None:
                                   chord_length_bars: float = 1.0,
                                   octave_shift: int = 0,
                                   pattern: int | None = None,
-                                  clear_first: bool = True) -> dict:
-        """Write a chord progression to a channel's piano roll."""
+                                  clear_first: bool = True) -> dict[str, Any]:
+        """Write a preset chord progression with the given root, scale and duration per chord in bars. clear_first replaces existing notes."""
         if progression not in COMMON_PROGRESSIONS:
             raise ValueError(f"unknown progression: {progression}; see gen_list_progressions")
         if scale not in SCALES:
@@ -237,7 +236,7 @@ def register(mcp: FastMCP) -> None:
         return _emit_notes_to_piano_roll(notes, clear_first=clear_first,
                                          channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Write Scale Melody", destructive=True)
     def gen_emit_melody(channel: int,
                         root: str = "C4",
                         scale: str = "minor",
@@ -246,8 +245,8 @@ def register(mcp: FastMCP) -> None:
                         octave_range: int = 2,
                         seed: int | None = None,
                         pattern: int | None = None,
-                        clear_first: bool = True) -> dict:
-        """Generate a random melody that stays within the given scale and write it to the piano roll."""
+                        clear_first: bool = True) -> dict[str, Any]:
+        """Write a scale-constrained melody. Set length and nominal note duration in bars. Supply a seed to repeat the generated melody."""
         if scale not in SCALES:
             raise ValueError(f"unknown scale: {scale}")
         rnd = random.Random(seed)
@@ -270,7 +269,7 @@ def register(mcp: FastMCP) -> None:
         return _emit_notes_to_piano_roll(notes, clear_first=clear_first,
                                          channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Write Bassline", destructive=True)
     def gen_emit_bassline(channel: int,
                           progression: str = "i-VII-VI-V",
                           root: str = "C2",
@@ -278,8 +277,8 @@ def register(mcp: FastMCP) -> None:
                           bar_length: float = 1.0,
                           pattern_style: Literal["root", "octaves", "walking", "eighths"] = "octaves",
                           pattern: int | None = None,
-                          clear_first: bool = True) -> dict:
-        """Create a bassline that follows a chord progression root (various styles)."""
+                          clear_first: bool = True) -> dict[str, Any]:
+        """Write a bassline following the selected progression's roots. bar_length sets the duration per chord in bars."""
         if progression not in COMMON_PROGRESSIONS:
             raise ValueError(f"unknown progression: {progression}")
         scale_deg = SCALES[scale]
@@ -307,12 +306,12 @@ def register(mcp: FastMCP) -> None:
         return _emit_notes_to_piano_roll(notes, clear_first=clear_first,
                                          channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Write Drum Notes to Piano Roll", destructive=True)
     def gen_emit_drum_pattern_notes(style: str = "boom_bap",
                                     midi_map: dict[str, int] | None = None,
                                     step_bars: float = 0.25,
                                     repeats: int = 1,
-                                    clear_first: bool = True) -> dict:
+                                    clear_first: bool = True) -> dict[str, Any]:
         """Emit a drum groove to the currently-open piano roll as individual notes.
 
         Use this when you don't have a MIDI bridge (no step sequencer access).
@@ -351,11 +350,11 @@ def register(mcp: FastMCP) -> None:
                     })
         return _emit_notes_to_piano_roll(notes, clear_first=clear_first)
 
-    @mcp.tool()
+    @tools.write("Write Drum Steps to Sequencer", destructive=True, idempotent=True)
     def gen_emit_drum_pattern_step_seq(channel_map: dict[str, int],
                                        style: str = "boom_bap",
                                        repeats: int = 1,
-                                       pattern: int | None = None) -> dict:
+                                       pattern: int | None = None) -> dict[str, Any]:
         """Write a drum groove into the step sequencer (requires MIDI bridge).
 
         Use this when you DO have a MIDI bridge. `channel_map`: map each of
@@ -384,7 +383,7 @@ def register(mcp: FastMCP) -> None:
                     "hint": "MIDI bridge unavailable. Use gen_emit_drum_pattern_notes instead "
                             "(writes individual notes into the piano roll; no MIDI required)."}
 
-    @mcp.tool()
+    @tools.write("Write Chord Arpeggio", destructive=True)
     def gen_emit_arpeggio(channel: int,
                           root: str = "C4",
                           quality: str = "min",
@@ -394,8 +393,8 @@ def register(mcp: FastMCP) -> None:
                           velocity: float = 0.8,
                           octaves: int = 1,
                           pattern: int | None = None,
-                          clear_first: bool = True) -> dict:
-        """Emit an arpeggio across N octaves for a given chord."""
+                          clear_first: bool = True) -> dict[str, Any]:
+        """Write an arpeggio across the requested octaves. step_bars sets both note length and spacing. length_bars sets the total duration."""
         root_midi = _parse_root(root)
         chord = _chord_midi(root_midi, quality)
         notes_pool = []

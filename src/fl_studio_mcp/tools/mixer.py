@@ -2,100 +2,99 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-from mcp.server.fastmcp import FastMCP
+from typing import Any, Optional
 
 from ..bridge_client import get_client
+from ._meta import ToolRegistrar
 
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    def mixer_count() -> dict:
+def register(tools: ToolRegistrar) -> None:
+    @tools.read("Count Mixer Tracks")
+    def mixer_count() -> dict[str, Any]:
         """Number of mixer tracks (incl master @ index 0)."""
         return get_client().call("mixer.count")
 
-    @mcp.tool()
-    def mixer_track_info(track: int) -> dict:
-        """Detailed info on a mixer track (name, vol, pan, mute, solo, arm, color, stereosep, sends, fx slots)."""
+    @tools.read("Get Mixer Track Details")
+    def mixer_track_info(track: int) -> dict[str, Any]:
+        """Read gain, pan, mute/solo/arm, stereo separation and FX slots for a mixer track. Track 0 is Master."""
         return get_client().call("mixer.trackInfo", track=track)
 
-    @mcp.tool()
-    def mixer_all_tracks(include_empty: bool = False) -> dict:
-        """List of all mixer tracks."""
+    @tools.read("List Mixer Tracks")
+    def mixer_all_tracks(include_empty: bool = False) -> dict[str, Any]:
+        """List mixer tracks and fader settings. Track 0 is Master. Set include_empty to include unnamed and default-named inserts."""
         return get_client().call("mixer.allTracks", include_empty=include_empty)
 
-    @mcp.tool()
-    def mixer_set_volume(track: int, volume: float) -> dict:
+    @tools.write("Set Mixer Track Volume", idempotent=True)
+    def mixer_set_volume(track: int, volume: float) -> dict[str, Any]:
         """Set mixer track volume (0.0..1.0)."""
         return get_client().call("mixer.setVolume", track=track, volume=volume)
 
-    @mcp.tool()
-    def mixer_set_pan(track: int, pan: float) -> dict:
+    @tools.write("Set Mixer Track Pan", idempotent=True)
+    def mixer_set_pan(track: int, pan: float) -> dict[str, Any]:
         """Set mixer track pan (-1.0..1.0)."""
         return get_client().call("mixer.setPan", track=track, pan=pan)
 
-    @mcp.tool()
-    def mixer_mute(track: int, muted: Optional[bool] = None) -> dict:
+    @tools.write("Mute or Unmute Mixer Track")
+    def mixer_mute(track: int, muted: Optional[bool] = None) -> dict[str, Any]:
         """Mute / unmute / toggle (None = toggle)."""
         return get_client().call("mixer.mute", track=track, muted=muted)
 
-    @mcp.tool()
-    def mixer_solo(track: int, solo: Optional[bool] = None) -> dict:
+    @tools.write("Solo or Unsolo Mixer Track")
+    def mixer_solo(track: int, solo: Optional[bool] = None) -> dict[str, Any]:
         """Solo / unsolo / toggle."""
         return get_client().call("mixer.solo", track=track, solo=solo)
 
-    @mcp.tool()
-    def mixer_arm(track: int, armed: Optional[bool] = None) -> dict:
-        """Arm track for recording."""
+    @tools.write("Arm or Disarm Mixer Track")
+    def mixer_arm(track: int, armed: Optional[bool] = None) -> dict[str, Any]:
+        """Set an insert's recording arm state. Omit armed to toggle."""
         return get_client().call("mixer.arm", track=track, armed=armed)
 
-    @mcp.tool()
-    def mixer_set_name(track: int, name: str) -> dict:
+    @tools.write("Rename Mixer Track", idempotent=True)
+    def mixer_set_name(track: int, name: str) -> dict[str, Any]:
         """Rename a mixer track."""
         return get_client().call("mixer.setName", track=track, name=name)
 
-    @mcp.tool()
-    def mixer_set_color(track: int, color: str) -> dict:
+    @tools.write("Set Mixer Track Color", idempotent=True)
+    def mixer_set_color(track: int, color: str) -> dict[str, Any]:
         """Set mixer track color ('#RRGGBB' or 'rgb(r,g,b)')."""
         return get_client().call("mixer.setColor", track=track, color=color)
 
-    @mcp.tool()
-    def mixer_set_stereo_separation(track: int, separation: float) -> dict:
+    @tools.write("Set Mixer Stereo Separation", idempotent=True)
+    def mixer_set_stereo_separation(track: int, separation: float) -> dict[str, Any]:
         """Set mixer track stereo separation (-1.0..1.0)."""
         return get_client().call("mixer.setStereoSep", track=track, separation=separation)
 
-    @mcp.tool()
-    def mixer_set_send_level(src_track: int, dst_track: int, level: float) -> dict:
+    @tools.write("Set Mixer Send Level", idempotent=True)
+    def mixer_set_send_level(src_track: int, dst_track: int, level: float) -> dict[str, Any]:
         """Set send level from one mixer track to another (0..1)."""
         return get_client().call("mixer.setSendLevel", src_track=src_track, dst_track=dst_track, level=level)
 
-    @mcp.tool()
-    def mixer_route(src_track: int, dst_track: int, enabled: bool = True) -> dict:
+    @tools.write("Enable or Disable Mixer Route", idempotent=True)
+    def mixer_route(src_track: int, dst_track: int, enabled: bool = True) -> dict[str, Any]:
         """Enable or disable a mixer route (send) between two tracks."""
         return get_client().call("mixer.route", src_track=src_track, dst_track=dst_track, enabled=enabled)
 
-    @mcp.tool()
-    def mixer_fx_slots(track: int) -> dict:
+    @tools.read("List Mixer FX Slots")
+    def mixer_fx_slots(track: int) -> dict[str, Any]:
         """List plugin IDs in the 10 FX slots of a mixer track (-1 = empty)."""
         return get_client().call("mixer.fxSlots", track=track)
 
-    @mcp.tool()
-    def mixer_select(track: int) -> dict:
+    @tools.write("Select Mixer Track", idempotent=True)
+    def mixer_select(track: int) -> dict[str, Any]:
         """Focus / select a mixer track."""
         return get_client().call("mixer.select", track=track)
 
-    @mcp.tool()
-    def mixer_get_eq(track: int) -> dict:
-        """Return 3-band mixer EQ (gains + frequencies)."""
+    @tools.read("Read Mixer EQ")
+    def mixer_get_eq(track: int) -> dict[str, Any]:
+        """Read the mixer track's EQ bands with gain, frequency and bandwidth values where available."""
         return get_client().call("mixer.getEQ", track=track)
 
-    @mcp.tool()
-    def mixer_set_eq_band(track: int, band: int, gain: float | None = None, frequency: float | None = None) -> dict:
+    @tools.write("Set Mixer EQ Band", idempotent=True)
+    def mixer_set_eq_band(track: int, band: int, gain: float | None = None, frequency: float | None = None) -> dict[str, Any]:
         """Set one band of the mixer EQ. band=0|1|2 (low/mid/high). gain -1..1, freq 0..1 (normalised)."""
         return get_client().call("mixer.setEQBand", track=track, band=band, gain=gain, frequency=frequency)
 
-    @mcp.tool()
-    def mixer_link_to_channel(channel: int, track: int, mode: str = "replace") -> dict:
-        """Link a channel to a mixer track. mode='replace'|'add'."""
+    @tools.write("Link Channel to Mixer Track", idempotent=True)
+    def mixer_link_to_channel(channel: int, track: int, mode: str = "replace") -> dict[str, Any]:
+        """Link a 0-based global channel to a mixer track. The legacy mode argument is accepted for compatibility."""
         return get_client().call("mixer.linkChannelToTrack", channel=channel, track=track, mode=mode)

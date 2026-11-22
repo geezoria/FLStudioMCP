@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from ..bridge_client import get_client
 
 
-def register(mcp: FastMCP) -> None:
-    @mcp.resource("fl://status")
+def register(mcp: MCPServer) -> None:
+    @mcp.resource("fl://status", title="FL Studio Bridge Status", mime_type="application/json")
     def status() -> str:
         """Bridge + transport quick status."""
         try:
@@ -20,15 +20,15 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, indent=2)
 
-    @mcp.resource("fl://project")
+    @mcp.resource("fl://project", title="FL Studio Project", mime_type="application/json")
     def project() -> str:
-        """Full project metadata: tempo, signature, channels, mixer, patterns, selection."""
+        """Project snapshot with BPM, timing resolution, counts and selection."""
         try:
             return json.dumps(get_client().call("project.metadata"), indent=2)
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, indent=2)
 
-    @mcp.resource("fl://transport")
+    @mcp.resource("fl://transport", title="FL Studio Transport", mime_type="application/json")
     def transport() -> str:
         """Live transport state (is_playing, position, tempo, loop mode)."""
         try:
@@ -36,7 +36,7 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, indent=2)
 
-    @mcp.resource("fl://channels")
+    @mcp.resource("fl://channels", title="FL Studio Channel Rack", mime_type="application/json")
     def channels() -> str:
         """Full channel rack as JSON."""
         try:
@@ -44,7 +44,7 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, indent=2)
 
-    @mcp.resource("fl://mixer")
+    @mcp.resource("fl://mixer", title="FL Studio Mixer", mime_type="application/json")
     def mixer() -> str:
         """All mixer tracks as JSON."""
         try:
@@ -52,7 +52,7 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, indent=2)
 
-    @mcp.resource("fl://patterns")
+    @mcp.resource("fl://patterns", title="FL Studio Patterns", mime_type="application/json")
     def patterns() -> str:
         """All patterns in the project."""
         try:
@@ -60,13 +60,22 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, indent=2)
 
-    @mcp.resource("fl://playlist")
+    @mcp.resource("fl://playlist", title="FL Studio Playlist", mime_type="application/json")
     def playlist() -> str:
-        """Playlist tracks + clips."""
+        """Playlist tracks and any clip or marker data the controller bridge can provide."""
         try:
-            tracks = get_client().call("playlist.allTracks", include_empty=False)
-            clips = get_client().call("playlist.listClips", track=None)
-            markers = get_client().call("playlist.listMarkers")
-            return json.dumps({"tracks": tracks, "clips": clips, "markers": markers}, indent=2)
+            client = get_client()
+            tracks = client.call("playlist.allTracks", include_empty=False)
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, indent=2)
+
+        data = {"tracks": tracks}
+        for key, action, params in (
+            ("clips", "playlist.listClips", {"track": None}),
+            ("markers", "playlist.listMarkers", {}),
+        ):
+            try:
+                data[key] = client.call(action, **params)
+            except Exception as e:
+                data[key] = {"ok": False, "error": str(e)}
+        return json.dumps(data, indent=2)
