@@ -2,118 +2,128 @@
 
 ## Components
 
-1. **`fl-studio-mcp` (Python package)** — FastMCP server process launched by
-   the MCP host (Claude Desktop / Claude Code). Stdio transport.
-2. **FL bridge script** — `device_FLStudioMCP.py` loaded by FL Studio as a MIDI
-   controller script. Runs a TCP listener in a background thread; command
-   execution happens on FL's main thread (`OnIdle`) because the FL API is not
-   thread-safe.
-3. **Piano-roll pyscript** — `ComposeWithLLM.pyscript` installed in FL
-   Studio's `Settings/Piano roll scripts/` folder. The only way to reach
-   `flpianoroll.Note / score.addNote / score.deleteNote` from the Python
-   environment.
-4. **Keystroke bridge** — `src/fl_studio_mcp/keystroke.py` sends Ctrl+Alt+Y to
-   FL via Win32 `SendInput` after the MCP server stages a piano-roll request
-   file. This is how the device bridge reaches `flpianoroll` — it cannot
-   import it directly.
+| Component | Runs in | Role |
+| --- | --- | --- |
+| `flmcp` server (`src/fl_studio_mcp/`) | Your AI app, as a stdio subprocess | MCP SDK 2.x `MCPServer`: 160 tools, 7 resources, 6 prompts. Serializes FL calls, talks to the bridge through files. |
+| Controller bridge (`fl_bridge/device_FLStudioMCP.py`) | FL Studio, as a MIDI controller script | Reads commands, runs FL API calls on FL's main thread, writes responses and a heartbeat. |
+| Piano-roll script (`fl_bridge/piano_roll/ComposeWithLLM.pyscript`) | FL Studio's piano roll | The only place `flpianoroll` (add / delete notes) is importable. |
+| CLI (`src/fl_studio_mcp/cli.py`) | Your terminal | `flmcp install / doctor / config / uninstall`. With no arguments it starts the server. |
 
-## Wire protocol
+## Why a file transport
 
-Length-prefixed JSON over TCP 127.0.0.1:9876:
+FL Studio 2025 and 2026 run controller scripts in a **sandboxed
+sub-interpreter**. The earlier 0.3 bridge opened a TCP socket on a background
+thread, which no longer works: `threading`, `socket` and most of `os`
+(`remove`, `replace`, `stat`, `mkdir`) fail or are missing. Built-in `open()`
+still works. Controller callbacks (`OnIdle`, `OnMidiMsg`, `OnRefresh`, …) all
+run on FL's main thread, which is where FL API calls belong anyway.
 
+So the server and the bridge exchange small JSON files in the bridge's script
+folder (`Settings/Hardware/fLMCP Bridge/`, override with `FLMCP_BRIDGE_DIR`):
+
+| File | Written by | Purpose |
+| --- | --- | --- |
+| `mcp_command.json` | server (atomic temp-file + `os.replace`) | The pending command. |
+| `mcp_response.json` | bridge | Result of the last command. |
+| `mcp_heartbeat.json` | bridge, ≈ once per second | Liveness and versions. `ts: 0` means FL shut the script down cleanly. |
+| `mcp_command.lock` | server | Cross-process lock (`msvcrt` / `fcntl`) so several MCP clients can share one FL. Never deleted. |
+| `fLMCP_log.txt` | bridge | Rolling log, capped at 64 KiB. |
+
+## Protocol 2
+
+```jsonc
+// mcp_command.json — single action
+{"protocol": 2, "id": 1763835600123456789, "action": "mixer.setVolume", "params": {"index": 1, "value": 0.8}}
+// or a batch (max 32 actions, executed in order on one tick)
+{"protocol": 2, "id": 1763835600123456790, "batch": [{"action": "...", "params": {}}, ...]}
+
+// mcp_response.json
+{"id": 1763835600123456789, "ok": true, "result": {...}, "elapsed_ms": 0.4}
+{"id": 1763835600123456789, "ok": false, "error": "…", "traceback": "…"}
+{"id": 1763835600123456790, "ok": true, "results": [{"ok": true, "result": ...}, ...]}
+
+// mcp_heartbeat.json
+{"protocol": 2, "bridge_version": "0.4.0", "api_version": 45, "fl_version": "…",
+ "pid": 1234, "last_id": 1763835600123456789, "idle_calls": 812, "midi_wakes": 40, "ts": 1763835601.2}
 ```
-frame  = <uint32 big-endian length> <utf-8 JSON payload>
-req    = {"id": int, "action": "mod.name", "params": {...}}
-resp   = {"id": int, "ok": bool, "result": any, "error": str|null}
-event  = {"event": "mod.name", "data": any}   # server push, no id
-```
 
-Events currently emitted by the bridge:
-
-- `transport.tick`  (~2 Hz while transport is playing)
-- `refresh`         (passes `flags` from `OnRefresh`)
-- `projectLoad`     (from `OnProjectLoad`)
+- **Ids** are `time_ns()`-based and strictly increasing: the client takes the
+  maximum of the clock, the heartbeat's `last_id`, and the ids already in the
+  command/response files, so clock rollback or a restarted MCP process can't
+  produce a duplicate id.
+- **Stale commands.** On `OnInit` the bridge marks whatever command is already
+  on disk as seen, so an edit queued before FL restarted is never replayed.
+- **Fail fast.** Before writing a command the client requires a heartbeat newer
+  than 5 s (after one short MIDI-wake probe). A dead bridge returns
+  `bridge unavailable` immediately instead of leaving a queued edit behind.
+- **Timeout.** `FLMCP_TIMEOUT` (default 10 s) per call.
+- **Size limit.** Commands are capped at 16 MiB.
 
 ## Request lifecycle
 
 ```
- MCP tool ─► BridgeClient.call(action, **params)
-          ─► socket.sendall(packed_frame)
-                 │
-      ┌──────────┴──────────────────────────────────────────────────────────┐
-      │                             FL Studio                                │
-      │                                                                      │
-      │  _server_loop (daemon thread) ── accept ──► _serve_client (worker)  │
-      │                                                │                     │
-      │                                                ▼                     │
-      │                                           _inbox.put((conn, req))    │
-      │                                                                      │
-      │  OnIdle():                                                           │
-      │    drained = 0                                                       │
-      │    while drained < 32:                                               │
-      │        conn, req = _inbox.get_nowait()                               │
-      │        result = _execute(req.action, req.params)                     │
-      │        conn.sendall(pack({"id": req.id, "ok": True, "result": ...})) │
-      │    (also pushes transport.tick every ~500ms)                         │
-      └──────────────────────────────────────────────────────────────────────┘
-          │
-          ▼
- MCP tool reads response frame, extracts result, returns to Claude
+MCP tools/call ──► serialize_fl_calls middleware (anyio lock: one FL call at a time)
+               ──► BridgeClient.call(action, **params)
+                     1. fresh heartbeat?          no → wake probe → RPCError "bridge unavailable"
+                     2. take mcp_command.lock
+                     3. write mcp_command.json   (temp file + os.replace, retried on Windows sharing errors)
+                     4. MIDI wake: CC 119 / ch 16 → "fLMCP" or loopMIDI output (if present)
+                     5. poll mcp_response.json every 8 ms until id matches or timeout
+                                     │
+FL Studio main thread ───────────────┼───────────────────────────────────────────
+   OnMidiMsg (wake CC) ─┐            ▼
+   OnIdle ──────────────┴─► _run_bridge_tick (re-entrancy guarded)
+                              read command → dispatch "group.name" to h_group_name(params)
+                              → write mcp_response.json → refresh heartbeat
+                              → step pending automation recordings
 ```
 
-## Piano-roll lifecycle
+The wake message is consumed (`event.handled = True`) and never reaches FL's
+MIDI routing. Without a wake port the bridge still answers from `OnIdle`; latency
+is then whatever FL's idle rate is.
 
-```
- MCP tool piano_roll_add_notes(channel, notes, pattern)
-     │
-     ▼
- bridge.pianoroll.addNotes:
-     - patterns.jumpToPattern(pattern)
-     - channels.selectOneChannel(channel)
-     - ui.showWindow(widPianoRoll); ui.setFocused(widPianoRoll)
-     - append JSON request to fLMCP_request.json
-     - respond {"staged": True, "needs_keystroke": True}
-     │
-     ▼
- MCP tool:
-     - keystroke.clear_state()
-     - keystroke.send_hotkey_windows()
-            │
-            ▼  (SendInput Ctrl+Alt+Y to FL window)
-     - FL fires ComposeWithLLM.pyscript.apply()
-         - reads fLMCP_request.json
-         - edits notes via flpianoroll
-         - writes fLMCP_state.json
-     - keystroke.wait_for_state()  ──► returns parsed state to Claude
-```
+## Piano-roll path
 
-## Threading notes
+`flpianoroll` is importable only inside piano-roll scripts, and those run only
+when the user (or a hotkey) triggers them:
 
-- The TCP server runs in a Python daemon thread. It cannot touch FL API.
-- `_inbox` is a stdlib `queue.Queue` (thread-safe).
-- `OnIdle()` runs on FL's main thread. It drains up to 32 queued requests per
-  tick (FL idle fires at roughly 60 Hz, so throughput is >1000 calls/sec).
-- Responses are written back directly from `OnIdle()` using `sendall()` —
-  still runs on the FL main thread but blocking time is bounded by payload
-  size and the socket is local; sub-millisecond in practice.
+1. A `piano_roll_*` or `gen_emit_*` tool writes `fLMCP_request.json` into
+   `Settings/Piano roll scripts/`.
+2. `keystroke.py` focuses FL and sends `Ctrl+Alt+Y` (FL's "run last piano-roll
+   script") via Win32 `SendInput`.
+3. `ComposeWithLLM.pyscript` reads the request, adds / deletes / edits notes
+   and writes the full note list to `fLMCP_state.json`, which the tool returns.
 
-## Color handling
+The user has to select **ComposeWithLLM** in a piano roll once so the hotkey
+targets it. On non-Windows platforms step 2 is manual.
 
-- Bridge accepts: `"#RRGGBB"`, `"rgb(r,g,b)"`, `[r,g,b]`, integer.
-- Bridge returns: always `"#RRGGBB"`.
-- FL Studio internal: `0xRRGGBB` integer (red in the high byte), verified
-  against `utils.RGBToColor(255, 0, 0) == 0xFF0000`.
-  - Note: fLMCP ≤ 0.1.0 used `0xBBGGRR` here, which swapped red and blue in FL.
-    Fixed in 0.2.0; see `_color_to_int` / `_int_to_color_hex` and
-    `tests/test_bridge_helpers.py`.
+## Server internals
 
-## Automation (non-blocking)
+- `server.py` — builds the `MCPServer`, installs the serialization middleware,
+  registers tools (`tools/`), resources (`resources/`) and prompts
+  (`prompts.py`), and holds the model-facing `instructions` (index conventions,
+  workflow hints).
+- `tools/_meta.py` — `ToolRegistrar.read(title)` / `.write(title, destructive=)`
+  attach MCP tool annotations (`readOnlyHint`, `destructiveHint`,
+  `idempotentHint`, `openWorldHint`) to every tool.
+- `tools/_toolsets.py` — `FLMCP_TOOLSETS` / `FLMCP_DISABLE_TOOLS` selection;
+  `fl_ping` and `fl_list_toolsets` are always registered.
+- `paths.py` — resolves FL's user data folder from
+  `HKCU\Software\Image-Line\Shared\Paths\Shared data`, falling back to
+  `~/Documents/Image-Line/FL Studio/Settings`.
+- Audio and voice modules import numpy / librosa / sounddevice lazily, so the
+  core server runs without them.
 
-`automation_record_*` records live automation clips. The bridge must arm + play
-the transport and write parameter values at the right musical times. It does
-**not** sleep between points — sleeping inside `OnIdle()` would block FL's main
-thread and freeze the UI. Instead each point is scheduled as an absolute
-monotonic deadline and applied from `OnIdle()` (`_process_automation`), so FL
-stays fully responsive. The tool returns immediately with
-`{"mode": "async", "scheduled": N}`; the clip finishes on its own after the last
-point. Per-point timing uses a tempo snapshot taken when the call is made.
+## Bridge internals
+
+- Handlers are plain functions `h_<group>_<name>(params) -> JSON-able` in
+  `device_FLStudioMCP.py`; the action name `group.name` maps to them.
+- `meta.ping`, `meta.info` and `meta.introspect` report versions and, for
+  `introspect`, every callable (with docstrings) the running FL exposes — the
+  ground truth for API-version gating.
+- FL API version is read from `general.getVersion()`; newer FL 2026 calls are
+  guarded by version checks or `hasattr` so the same script runs on FL 2024
+  (API 3x) through FL 2026 (API 45).
+
+See [`FL_API_2026.md`](FL_API_2026.md) for the API changes between FL 2025 and
+2026, and [`LIMITATIONS.md`](LIMITATIONS.md) for what FL's API cannot do.

@@ -24,12 +24,15 @@ git clone https://github.com/geezoria/FLStudioMCP && cd FLStudioMCP
 python -m venv .venv && .venv/Scripts/activate      # macOS: source .venv/bin/activate
 pip install -e ".[dev]"
 ruff check . && pytest
-flmcp install --dev        # copy the bridge into FL's user data folder (re-run after editing it)
-flmcp doctor               # check that FL sees the bridge
+python -m fl_studio_mcp install --command python   # copy your working-tree bridge into FL and
+                                                   # point your AI apps at this venv (re-run after edits)
+python -m fl_studio_mcp doctor                     # check that FL sees the bridge
 ```
 
 After editing the FL-side script, reload it in FL (*Options → MIDI settings →
-select the fLMCP device → Update scripts* or restart FL).
+select the fLMCP device → Update scripts* or restart FL). The bridge writes
+`fLMCP_log.txt` next to the script, and FL's *View → Script output* shows its
+`[fLMCP]` lines.
 
 ## Adding a tool
 
@@ -42,7 +45,12 @@ select the fLMCP device → Update scripts* or restart FL).
    description that states units, ranges and index bases.
 3. Add a test in `tests/test_bridge_handlers.py` (and a server-side test if the
    tool has logic of its own).
-4. Note it in `CHANGELOG.md` under *Unreleased*.
+4. Regenerate the tool reference: `python scripts/gen_tools_doc.py` (CI fails
+   if `docs/TOOLS.md` is stale).
+5. Note it in `CHANGELOG.md` under *Unreleased*.
+
+If an agent (Claude Code, Codex, …) is doing the work, it should read
+[`AGENTS.md`](AGENTS.md) first.
 
 ## Pull requests
 

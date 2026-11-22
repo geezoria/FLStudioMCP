@@ -66,3 +66,11 @@ fLMCP_state.json
 *.mp3
 *.ogg
 !tests/**/fixtures/*.wav
+
+# --- Bridge transport files (when FLMCP_BRIDGE_DIR points inside the repo) -
+mcp_command.json
+mcp_response.json
+mcp_heartbeat.json
+mcp_command.lock
+mcp_command.*.tmp
+fLMCP_log.txt

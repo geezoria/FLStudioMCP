@@ -3,6 +3,78 @@
 All notable changes to fLMCP are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — Unreleased
+
+Works on FL Studio 2025 and 2026 again, on MCP SDK 2.x, and installs with one
+command.
+
+### Breaking
+
+- **The PyPI distribution is now `flmcp`.** `fl-studio-mcp` on PyPI belongs to a
+  different project. The import package (`fl_studio_mcp`) and the legacy
+  `fl-studio-mcp` console script stay. The MCP client entry is renamed to
+  `flmcp`, and `flmcp install` removes the old `fl-studio-mcp` entries.
+- **The TCP bridge is gone.** FL Studio 2025/2026 run controller scripts in a
+  sandboxed sub-interpreter without threads or sockets (#1). The bridge now
+  uses a file transport (protocol 2). Re-run `flmcp install` so FL gets the new
+  `device_FLStudioMCP.py`.
+- **Requires `mcp>=2.3,<3`.** The server moved from the removed
+  `mcp.server.fastmcp` to `mcp.server.mcpserver` (#3).
+
+### Added
+
+- **File + MIDI-wake transport (protocol 2).** Atomic command and response
+  files, a once-a-second heartbeat with bridge/FL/API versions, a
+  cross-process lock, `time_ns` ids that survive clock rollback, stale-command
+  suppression on FL start, batched actions, and fail-fast "bridge unavailable"
+  when FL isn't listening. An optional CC 119 / ch 16 wake through a loopMIDI
+  port named `fLMCP` brings round-trips down to tens of milliseconds.
+  Thanks to @cgradusov (#2) and @marcostolosa (#4, #5), whose PRs first proved
+  a file-based transport inside FL 2025's sandbox.
+- **`flmcp` CLI.**
+  - `flmcp install` copies the FL scripts into FL's real user data folder,
+    creates the loopMIDI port, assigns the controller, and registers the server
+    with Claude Desktop, Claude Code, Cursor and VS Code, backing up configs
+    first.
+  - `flmcp doctor` checks files, outdated scripts, the MIDI port and controller
+    assignment, FL process, heartbeat, live ping and version mismatch.
+  - `flmcp config` prints per-client snippets, including Codex.
+  - `flmcp uninstall` removes everything again.
+  - Running `flmcp` with no arguments starts the server, so `uvx flmcp` just
+    works.
+- **The FL scripts ship inside the wheel**, so installing from PyPI/uvx needs no
+  git clone.
+- **MCP 2 features.** Every tool has a title and read-only / destructive /
+  idempotent annotations, and returns structured output.
+- **6 guided prompts:** *Make a Beat*, *Write a Chord Progression*, *Hum to
+  Melody*, *Flip Audio to Drum & Bass*, *Review a Mix*, *Project Overview*.
+- **Toolsets:** `FLMCP_TOOLSETS` (`all`, `core`, `lean` or any group list) and
+  `FLMCP_DISABLE_TOOLS`. The new `fl_list_toolsets` tool lists them.
+- **FL Studio 2026 API support** (gated, so FL 2024/2025 keep working):
+  - `pattern_set_length`, which really sets the length now (in bars or beats).
+  - New `pattern_clear` tool.
+  - New `ui_show_picker` tool, which opens the plugin or project picker.
+  - `project_metadata` reports title, author and genre.
+  - `mixer_count` reports `insert_count`.
+- `fl_introspect` tool, backed by the new `meta.introspect` bridge action. It
+  lists which scripting functions the running FL build exposes, with optional
+  docstrings.
+- `fl_ping` warns when the bridge script inside FL is older than the server and
+  tells you how to update it.
+- `server.json` for the official MCP Registry (`io.github.geezoria/flmcp`).
+- CI on Windows/macOS/Linux × Python 3.10/3.12/3.13 with a wheel smoke test,
+  issue and PR templates, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, and a
+  generated `docs/TOOLS.md` (`scripts/gen_tools_doc.py`).
+- `docs/FL_API_2026.md`: FL 2026 scripting API changes (API 45).
+
+### Changed
+
+- `scripts/install_windows.ps1` / `uninstall_windows.ps1` are thin wrappers
+  around `flmcp install` / `flmcp uninstall`.
+- Bridge, CLI and FL user data folder detection honour FL's *Shared data*
+  registry setting and `FLMCP_BRIDGE_DIR`.
+- Rewrote README, ARCHITECTURE and LIMITATIONS for the new transport.
+
 ## [0.3.0] — 2026-06-17
 
 ### Added — polyphonic transcription (Spotify Basic Pitch)
@@ -25,7 +97,7 @@ All notable changes to fLMCP are documented here. This project adheres to
     `tensorflow<2.15.1`, which has no 3.12 build). fLMCP installs Basic Pitch
     with `--no-deps` and runs inference on the **ONNX** runtime instead (no
     TensorFlow). The installer's `-Polyphonic` switch does this automatically;
-    manual users run `pip install "fl-studio-mcp[polyphonic]"` then
+    manual users run `pip install "fl-studio-mcp[polyphonic]"` (now `flmcp[polyphonic]`) then
     `pip install basic-pitch --no-deps`.
 - Tools now report which `engine` produced the notes.
 

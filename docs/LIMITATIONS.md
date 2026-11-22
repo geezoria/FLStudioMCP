@@ -25,7 +25,10 @@ the error response to fall back gracefully.
   clone, find-by-name, next/prev
 - ❌ `pattern_delete` — FL has no `deletePattern()`. Bridge soft-deletes by
   emptying the name; pattern remains in the pool.
-- ❌ `pattern_set_length` — not exposed; length is derived from notes / steps.
+- ✅ `pattern_set_length` (bars or beats) and `pattern_clear` — **FL Studio 2026
+  (26.1 / 26.1.3) or newer**, via `patterns.setPatternLength` /
+  `patterns.clearPattern`. Older FL returns `ok: false` with a hint; there,
+  length still follows the notes / step grid.
 
 ### Channels
 - ✅ name / volume / pan / color / mute / solo / route-to-mixer / step grid.
@@ -83,8 +86,9 @@ the error response to fall back gracefully.
 - ❌ `plugin_set_preset` (jump to a numeric preset) — `plugins.setPreset` is not
   exposed by FL's public Python API. The tool returns a structured error
   pointing at `plugin_next_preset` / `plugin_prev_preset`.
-- ❌ **Loading new plugins into a slot** — Browser drag-drop only. Ask the
-  user to load once, then fLMCP fully automates the parameters.
+- ❌ **Loading new plugins into a slot** — not scriptable. On FL Studio 2026,
+  `ui_show_picker("plugin")` opens the plugin picker so the user can choose one
+  in a click; after that fLMCP fully automates the parameters.
 
 ### Piano roll
 - ✅ add / delete / clear / read / quantize / transpose / humanize /
@@ -133,19 +137,22 @@ error: "...not available"}` rather than raising.
   it pins `tensorflow<2.15.1`, which has no Python 3.12 build. fLMCP installs it
   with `--no-deps` and runs inference on the **ONNX** runtime (no TensorFlow).
   Use `install_windows.ps1 -Polyphonic`, or:
-  `pip install "fl-studio-mcp[polyphonic]"` then `pip install basic-pitch --no-deps`.
+  `pip install "flmcp[polyphonic]"` then `pip install basic-pitch --no-deps`.
   When Basic Pitch is absent, `polyphonic=True` returns a structured install
   hint and the monophonic engine still works.
 
-### TCP transport
-- Single-connection at a time: multiple concurrent MCP clients will serialize
-  through one TCP conn. This keeps FL's main thread predictable; typically
-  fine since Claude is the only client.
-- Bridge binds to `127.0.0.1:9876`. If another process holds that port,
-  bridge's `OnInit` logs the bind error; clients then get `bridge unavailable`.
+### File transport
+- One command at a time. Calls from every MCP client on the machine are
+  serialized through `mcp_command.lock`, which keeps FL's main thread
+  predictable. Use batched actions (the server does this internally where it
+  matters) rather than many tiny calls.
+- If the bridge's heartbeat is older than 5 s the server refuses to queue a
+  command and returns `bridge unavailable` — nothing is left waiting to fire when
+  FL comes back.
+- Large payloads (full channel rack / mixer dumps) are fine; commands are capped
+  at 16 MiB.
 
-### OnIdle throughput
-FL Studio's `OnIdle` fires roughly 10–30 Hz depending on workload (not
-60 Hz). Each drain cycle processes up to 32 queued requests, so realistic
-throughput is a few hundred calls/sec. Individual call latency is typically
-15–80 ms round-trip.
+### Latency
+With the `fLMCP` loopMIDI wake port, a round-trip is typically a few tens of
+milliseconds. Without it the bridge answers from `OnIdle`, whose rate depends on
+FL's workload (roughly 10–30 Hz), so expect up to ~100 ms per call.
