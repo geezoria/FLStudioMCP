@@ -426,7 +426,9 @@ def cmd_doctor(a: argparse.Namespace) -> int:
         if wake:
             _ok(f"wake port available: {wake[0]}")
         else:
-            _info("no loopMIDI/fLMCP port - FL polls on idle only (usually fine)")
+            _warn("no loopMIDI/fLMCP MIDI port - the server cannot wake the bridge. FL 2026 "
+                  "does not poll scripts on idle, so calls will time out. Create a loopMIDI "
+                  "port named 'fLMCP'.")
         rows = [r for r in fl_midi_inputs() if str(r.get("ScriptFolder", "")) == "fLMCP Bridge"]
         if rows:
             for r in rows:
@@ -438,37 +440,44 @@ def cmd_doctor(a: argparse.Namespace) -> int:
 
     print("\nBridge")
     hb_path = bdir / "mcp_heartbeat.json"
-    try:
-        hb = json.loads(hb_path.read_text("utf-8"))
-        age = time.time() - float(hb.get("ts") or 0)
-    except (OSError, ValueError):
-        hb, age = None, None
+    hb = _read_heartbeat(hb_path) or None
+    age = time.time() - float(hb.get("ts") or 0) if hb else None
     if hb is None:
         problems += 1
         _warn("no heartbeat - the controller script has never run. Enable it in MIDI Settings.")
     elif not hb.get("ts"):
         problems += 1
         _warn("bridge stopped cleanly (FL closed or script disabled)")
-    elif age is not None and age > 5:
-        problems += 1
-        _warn(f"heartbeat is {age:.0f}s old - FL closed, frozen, or script disabled")
     else:
-        _ok(f"heartbeat fresh: FL {hb.get('fl_version')}, API {hb.get('api_version')}, "
-            f"bridge {hb.get('bridge_version')}")
+        # FL 2026 may never call OnIdle for this script, so the heartbeat only
+        # refreshes when a MIDI wake arrives. A stale heartbeat is therefore not
+        # a failure by itself: ping (which wakes the bridge) decides.
         from .bridge_client import BridgeClient
 
         try:
             client = BridgeClient(timeout=5)
             t0 = time.perf_counter()
-            client.ping()
+            info = client.ping()
             rtt = (time.perf_counter() - t0) * 1000
-            _ok(f"round trip {rtt:.0f} ms")
-            if hb.get("bridge_version") != __version__:
-                _warn(f"FL is running bridge {hb.get('bridge_version')} but the server is "
-                      f"{__version__} - restart FL or reload the script")
         except Exception as e:  # noqa: BLE001
             problems += 1
             _warn(f"ping failed: {e}")
+            if age is not None and age > 5:
+                _info(f"heartbeat is {age:.0f}s old - FL closed, frozen, showing a dialog, "
+                      "or script disabled")
+        else:
+            info = info if isinstance(info, dict) else {}
+            version = info.get("bridge_version") or hb.get("bridge_version")
+            _ok(f"bridge {version} answered in {rtt:.0f} ms: FL {hb.get('fl_version')}, "
+                f"API {hb.get('api_version')}")
+            fresh = _read_heartbeat(hb_path) or hb
+            if not fresh.get("idle_calls"):
+                _info("FL does not call OnIdle for this script; it runs on MIDI wakes only "
+                      "(normal on FL 2026, needs the loopMIDI port)")
+            if version != __version__:
+                problems += 1
+                _warn(f"FL is running bridge {version} but the server is {__version__} - "
+                      "run `flmcp install`, then restart FL or reload the script")
 
     print()
     if problems:
@@ -476,6 +485,14 @@ def cmd_doctor(a: argparse.Namespace) -> int:
         return 1
     print("All good.")
     return 0
+
+
+def _read_heartbeat(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def cmd_config(a: argparse.Namespace) -> int:

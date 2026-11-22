@@ -13,7 +13,7 @@ rack and step sequencer, mixer, plugin parameters, piano-roll note writing,
 playlist, arrangements, automation, undo, rendering — plus high-level music
 generators, voice-to-MIDI humming and audio-file analysis.
 
-- **163 tools, 7 resources, 6 guided prompts**, with MCP tool annotations
+- **165 tools, 7 resources, 6 guided prompts**, with MCP tool annotations
   (read-only / destructive) so clients can auto-approve safe calls.
 - **Works in FL Studio 2025 and 2026's sandboxed Python.** No sockets or threads
   inside FL — a file transport with an optional MIDI wake-up (see
@@ -117,7 +117,7 @@ appear in clients that support MCP prompts (e.g. the `/` menu in Claude).
 | `meta` | 6 | ping/health, reconnect, bridge info, API introspection, raw action, toolsets |
 | `transport` | 14 | play / stop / record, position, tempo, time signature, metronome, jog |
 | `patterns` | 14 | create, rename, clone, clear, color, set length (FL 2026), find by name |
-| `channels` | 20 | channel rack, step sequencer get/set, routing, note trigger |
+| `channels` | 22 | channel rack, step sequencer get/set, rack swing, routing, note trigger |
 | `mixer` | 18 | volume / pan / mute / solo / arm, sends, EQ, FX slots |
 | `plugins` | 13 | parameters get / set / search, presets, editor windows |
 | `piano_roll` | 11 | add / read / clear notes, chords, quantize, transpose, humanize |
@@ -146,7 +146,7 @@ groups at startup with environment variables:
 
 | Variable | Example | Effect |
 | --- | --- | --- |
-| `FLMCP_TOOLSETS` | `lean` · `core` · `transport,mixer,piano_roll` | Presets: `all` (default, 163), `lean` (41 composing essentials), `core` (25). Groups can be combined with presets. |
+| `FLMCP_TOOLSETS` | `lean` · `core` · `transport,mixer,piano_roll` | Presets: `all` (default, 165), `lean` (41 composing essentials), `core` (25). Groups can be combined with presets. |
 | `FLMCP_DISABLE_TOOLS` | `fl_call_raw,project_render` | Remove individual tools. |
 
 `fl_ping` and `fl_list_toolsets` are always available; `fl_list_toolsets` shows
@@ -192,14 +192,15 @@ MP3 decoding needs `ffmpeg` on `PATH`.
 
 - **Why files?** FL Studio 2025+ runs controller scripts in a sandboxed
   interpreter: no sockets, no threads, unreliable `os` file operations — but
-  `open()` works. The bridge polls a command file from FL's `OnIdle` callback
-  and writes the response. Commands carry a protocol version and unique id,
+  `open()` works. The bridge reads a command file when FL calls it back and
+  writes the response. Commands carry a protocol version and unique id,
   stale commands from an earlier session are ignored, and calls are serialized
   with a cross-process lock.
-- **Why MIDI wake?** `OnIdle` frequency depends on FL; a CC 119 message on
-  channel 16 sent to the `fLMCP` loopMIDI port triggers `OnMidiMsg` immediately,
-  so round-trips stay in the tens of milliseconds. Without it everything still
-  works, just with idle-poll latency.
+- **Why MIDI wake?** A CC 119 message on channel 16 sent to the `fLMCP`
+  loopMIDI port triggers `OnMidiMsg` immediately, so round-trips stay in the
+  tens of milliseconds (median ≈ 40 ms measured on FL 2026). FL 2026 does not
+  call the script's `OnIdle` at all in our tests, so there **the wake port is
+  required**, not just faster.
 - **Why a piano-roll script?** `flpianoroll` (the only API that adds/removes
   notes) exists only inside piano-roll scripts, so the server stages a request
   and triggers the script with FL's script hotkey.
@@ -213,7 +214,7 @@ Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · what FL's API can't d
 | | Windows | macOS |
 | --- | :-: | :-: |
 | Controller bridge (transport, mixer, channels, plugins…) | ✅ | ✅ (set `FLMCP_BRIDGE_DIR` if auto-detection fails) |
-| MIDI wake (low latency) | ✅ loopMIDI | — (idle polling) |
+| MIDI wake (required on FL 2026) | ✅ loopMIDI | ❌ not yet: relies on `OnIdle`, which FL 2026 did not call on Windows (untested on macOS) |
 | `flmcp install` client registration | ✅ | ✅ |
 | Automatic controller assignment | ✅ | manual |
 | Piano-roll writing (hotkey trigger) | ✅ | manual `Ctrl+Alt+Y` |

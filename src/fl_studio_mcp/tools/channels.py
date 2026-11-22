@@ -24,6 +24,19 @@ def register(tools: ToolRegistrar) -> None:
         """List channels with 0-based global indices, names, controls and mixer routing."""
         return get_client().call("channels.all")
 
+    @tools.read("Get Channel Rack Swing")
+    def channel_get_swing() -> dict[str, Any]:
+        """Return the Channel rack's global swing, 0.0 (straight) to 1.0 (maximum). FL Studio 2026+."""
+        return get_client().call("channels.getSwing")
+
+    @tools.write("Set Channel Rack Swing", idempotent=True)
+    def channel_set_swing(amount: float) -> dict[str, Any]:
+        """Set the Channel rack's global swing, 0.0 (straight) to 1.0 (maximum); clamped. FL Studio 2026+.
+
+        This is the rack-wide Swing knob and affects every step-sequenced channel.
+        """
+        return get_client().call("channels.setSwing", amount=amount)
+
     @tools.read("Get Selected Channel")
     def channel_selected() -> dict[str, Any]:
         """Return the selected channel's global index and name, or null values if none is selected."""

@@ -161,6 +161,11 @@ def _safe(fn, *a, **kw):
         return None
 
 
+def _api_version():
+    version = _safe(general.getVersion)
+    return version if isinstance(version, int) else 0
+
+
 # ----------------------------------------------------------------------------
 # File transport (standalone because FL loads this script directly)
 # ----------------------------------------------------------------------------
@@ -494,8 +499,36 @@ def h_transport_jog(p):
 
 # ---- patterns ---------------------------------------------------------------
 
+def _pattern_max():
+    return int(_safe(patterns.patternMax) or 999) if hasattr(patterns, "patternMax") else 999
+
+
+def _check_pattern_index(index):
+    top = _pattern_max()
+    if not 1 <= index <= top:
+        raise ValueError("pattern index %d out of range (1-%d, 1-based)" % (index, top))
+    return index
+
+
+def _pattern_in_use(index):
+    # patternCount() is not an index bound: it is 0 in a fresh project even
+    # though "Pattern 1" exists. A pattern is in use once it has content
+    # (isPatternDefault, API 23+) or a non-default name.
+    if patterns.getPatternName(index) != "Pattern %d" % index:
+        return True
+    return not patterns.isPatternDefault(index)
+
+
+def _used_patterns():
+    """1-based indices of patterns with content or a custom name, ascending."""
+    if not hasattr(patterns, "isPatternDefault"):
+        return list(range(1, patterns.patternCount() + 1))
+    return [i for i in range(1, _pattern_max() + 1) if _pattern_in_use(i)]
+
+
 def h_patterns_count(_):
-    return {"count": patterns.patternCount()}
+    used = _used_patterns()
+    return {"count": len(used), "last_index": used[-1] if used else 0}
 
 
 def h_patterns_current(_):
@@ -504,8 +537,9 @@ def h_patterns_current(_):
 
 
 def h_patterns_list(_):
+    indices = sorted(set(_used_patterns()) | {patterns.patternNumber()})
     out = []
-    for i in range(1, patterns.patternCount() + 1):
+    for i in indices:
         out.append({
             "index": i,
             "name": patterns.getPatternName(i),
@@ -516,27 +550,28 @@ def h_patterns_list(_):
 
 
 def h_patterns_select(p):
-    idx = int(p.get("index", 1))
+    idx = _check_pattern_index(int(p.get("index", 1)))
     patterns.jumpToPattern(idx)
     return {"selected": idx, "name": patterns.getPatternName(idx)}
 
 
 def h_patterns_create(p):
     name = p.get("name", "")
-    # FL appends a new pattern when you setPatternName on patternCount()+1
-    new_idx = patterns.patternCount() + 1
+    used = _used_patterns()
+    new_idx = (used[-1] if used else 0) + 1
+    _check_pattern_index(new_idx)
     patterns.setPatternName(new_idx, name or ("Pattern %d" % new_idx))
     return {"index": new_idx, "name": patterns.getPatternName(new_idx)}
 
 
 def h_patterns_rename(p):
-    idx = int(p["index"]); name = p.get("name", "")
+    idx = _check_pattern_index(int(p["index"])); name = p.get("name", "")
     patterns.setPatternName(idx, name)
     return {"index": idx, "name": patterns.getPatternName(idx)}
 
 
 def h_patterns_set_color(p):
-    idx = int(p["index"]); color = _color_to_int(p.get("color", "#888888"))
+    idx = _check_pattern_index(int(p["index"])); color = _color_to_int(p.get("color", "#888888"))
     patterns.setPatternColor(idx, color)
     return {"index": idx, "color": _int_to_color_hex(patterns.getPatternColor(idx))}
 
@@ -544,7 +579,7 @@ def h_patterns_set_color(p):
 def h_patterns_delete(p):
     """FL's public Python API has no deletePattern(). Workaround: rename to empty
     and mark as unused — the pattern stays in the pool but is effectively hidden."""
-    idx = int(p["index"])
+    idx = _check_pattern_index(int(p["index"]))
     patterns.setPatternName(idx, "")
     return {"ok": False,
             "soft_deleted": idx,
@@ -552,14 +587,27 @@ def h_patterns_delete(p):
 
 
 def h_patterns_clone(p):
-    """clonePattern(index=None) clones the current pattern. We jump first, then clone."""
-    src = int(p["index"])
-    new_name = p.get("new_name", "") or (patterns.getPatternName(src) + " (copy)")
-    patterns.jumpToPattern(src)
-    patterns.clonePattern()
-    new_idx = patterns.patternCount()
-    patterns.setPatternName(new_idx, new_name)
-    return {"new_index": new_idx, "name": patterns.getPatternName(new_idx)}
+    """clonePattern(index) copies into the next free slot and selects the copy;
+    FL 2026 (API 43+) also accepts a destination index."""
+    src = _check_pattern_index(int(p["index"]))
+    dest = p.get("dest_index")
+    before = patterns.patternNumber()
+    if dest is not None:
+        dest = _check_pattern_index(int(dest))
+        if _api_version() < 43:
+            return _unsupported("Cloning into a chosen pattern", "FL Studio 2026 (26.1.1+)")
+        patterns.clonePattern(src, dest)
+        new_idx = dest
+    else:
+        patterns.clonePattern(src)
+        new_idx = patterns.patternNumber()
+        if new_idx in (before, src):
+            new_idx = _used_patterns()[-1]
+    patterns.setPatternName(new_idx, p.get("new_name") or (patterns.getPatternName(src) + " (copy)"))
+    return {"source_index": src, "new_index": new_idx, "name": patterns.getPatternName(new_idx)}
+
+
+STEPS_PER_BEAT = 4  # an FL step is a 16th note
 
 
 def _beats_per_bar():
@@ -576,47 +624,57 @@ def _unsupported(feature, needs):
 
 
 def h_patterns_set_length(p):
-    """patterns.setPatternLength(index, beats) exists from FL 2026 (26.1)."""
-    index = int(p["index"])
-    if not 1 <= index <= patterns.patternCount():
-        raise ValueError("pattern index out of range (1-based)")
+    """patterns.setPatternLength(index, steps) exists from FL 2026 (26.1).
+
+    Verified live on 26.1.7: the unit is steps (16 = one 4/4 bar), not beats as
+    the API stubs claim.
+    """
+    index = _check_pattern_index(int(p["index"]))
     if not hasattr(patterns, "setPatternLength"):
         return _unsupported("Setting pattern length", "FL Studio 2026 (26.1+)")
-    per_bar = _beats_per_bar()
-    beats = p.get("beats")
-    if beats is None:
-        beats = float(p["bars"]) * per_bar
-    beats = int(round(float(beats)))
-    if beats < 1:
-        raise ValueError("length must be at least one beat")
-    patterns.setPatternLength(index, beats)
-    length = _safe(patterns.getPatternLength, index) if hasattr(patterns, "getPatternLength") else None
-    return {"ok": True, "index": index, "requested_beats": beats, "length_beats": length,
+    per_bar = _beats_per_bar() * STEPS_PER_BEAT
+    if p.get("steps") is not None:
+        steps = float(p["steps"])
+    elif p.get("beats") is not None:
+        steps = float(p["beats"]) * STEPS_PER_BEAT
+    else:
+        steps = float(p["bars"]) * per_bar
+    steps = int(round(steps))
+    if steps < 1:
+        raise ValueError("length must be at least one step")
+    patterns.setPatternLength(index, steps)
+    length = _safe(patterns.getPatternLength, index)
+    return {"ok": True, "index": index, "requested_steps": steps, "length_steps": length,
+            "length_beats": round(length / STEPS_PER_BEAT, 3) if length else None,
             "length_bars": round(length / per_bar, 3) if length else None,
-            "beats_per_bar": per_bar}
+            "steps_per_bar": per_bar}
 
 
 def h_patterns_clear(p):
-    """patterns.clearPattern(index) exists from FL 2026 (26.1.3)."""
-    index = int(p["index"])
-    if not 1 <= index <= patterns.patternCount():
-        raise ValueError("pattern index out of range (1-based)")
+    """patterns.clearPattern(index) exists from FL 2026 (26.1.3).
+
+    FL shows a modal Confirm dialog and this call returns only once the user
+    answers it, so the server reports a pending confirmation on timeout.
+    """
+    index = _check_pattern_index(int(p["index"]))
     if not hasattr(patterns, "clearPattern"):
         return _unsupported("Clearing a pattern", "FL Studio 2026 (26.1.3+)")
     patterns.clearPattern(index)
-    return {"ok": True, "cleared": index, "name": patterns.getPatternName(index)}
+    return {"ok": True, "index": index, "name": patterns.getPatternName(index),
+            "cleared": bool(_safe(patterns.isPatternDefault, index))
+            if hasattr(patterns, "isPatternDefault") else None}
 
 
 def h_patterns_find_by_name(p):
     target = (p.get("name") or "").lower().strip()
-    for i in range(1, patterns.patternCount() + 1):
+    for i in _used_patterns():
         if patterns.getPatternName(i).lower() == target:
             return {"index": i, "name": patterns.getPatternName(i)}
     return {"index": None, "name": None}
 
 
 def h_patterns_jump_next(_):
-    patterns.jumpToPattern(min(patterns.patternNumber() + 1, patterns.patternCount()))
+    patterns.jumpToPattern(min(patterns.patternNumber() + 1, _pattern_max()))
     return h_patterns_current({})
 
 
@@ -653,6 +711,21 @@ def _ch_info(i):
 
 def h_channels_count(p):
     return {"count": channels.channelCount(bool(p.get("global_count", True)))}
+
+
+def h_channels_get_swing(_):
+    """channels.getSwing() (FL 2026, API 42): the Channel rack's global swing, 0..1."""
+    if not hasattr(channels, "getSwing"):
+        return _unsupported("Channel rack swing", "FL Studio 2026 (26.1+)")
+    return {"ok": True, "swing": round(float(channels.getSwing()), 4)}
+
+
+def h_channels_set_swing(p):
+    if not hasattr(channels, "setSwing"):
+        return _unsupported("Channel rack swing", "FL Studio 2026 (26.1+)")
+    amount = max(0.0, min(1.0, float(p["amount"])))
+    channels.setSwing(amount)
+    return {"ok": True, "swing": round(float(channels.getSwing()), 4)}
 
 
 def h_channels_info(p):
@@ -1799,6 +1872,8 @@ _HANDLERS = {
     "patterns.jumpPrev": h_patterns_jump_prev,
     # channels
     "channels.count": h_channels_count,
+    "channels.getSwing": h_channels_get_swing,
+    "channels.setSwing": h_channels_set_swing,
     "channels.info": h_channels_info,
     "channels.all": h_channels_all,
     "channels.selected": h_channels_selected,

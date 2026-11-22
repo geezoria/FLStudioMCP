@@ -25,10 +25,13 @@ the error response to fall back gracefully.
   clone, find-by-name, next/prev
 - ❌ `pattern_delete` — FL has no `deletePattern()`. Bridge soft-deletes by
   emptying the name; pattern remains in the pool.
-- ✅ `pattern_set_length` (bars or beats) and `pattern_clear` — **FL Studio 2026
+- ✅ `pattern_set_length` (bars, beats or steps) and `pattern_clear` — **FL Studio 2026
   (26.1 / 26.1.3) or newer**, via `patterns.setPatternLength` /
   `patterns.clearPattern`. Older FL returns `ok: false` with a hint; there,
   length still follows the notes / step grid.
+- ⚠️ `pattern_clear` makes FL show a **Confirm dialog**. FL (and the bridge) wait
+  until the user answers it; the tool then reports `pending_confirmation`.
+- ✅ `pattern_clone` into a chosen pattern (`dest_index`) — FL 2026.1.1+.
 
 ### Channels
 - ✅ name / volume / pan / color / mute / solo / route-to-mixer / step grid.
@@ -154,5 +157,11 @@ error: "...not available"}` rather than raising.
 
 ### Latency
 With the `fLMCP` loopMIDI wake port, a round-trip is typically a few tens of
-milliseconds. Without it the bridge answers from `OnIdle`, whose rate depends on
-FL's workload (roughly 10–30 Hz), so expect up to ~100 ms per call.
+milliseconds (FL 2026.1.7: median 42 ms, p95 56 ms). FL 2026 does not call the
+script's `OnIdle`, so without the wake port the bridge never sees commands.
+Older FL versions that call `OnIdle` answer without it, at FL's idle rate.
+
+### Modal dialogs
+Some FL functions open a modal dialog (e.g. `pattern_clear` asks for
+confirmation). While it is open FL's UI thread, and with it the bridge, waits.
+Calls time out until the user answers it in FL.
