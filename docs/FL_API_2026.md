@@ -76,6 +76,10 @@ the exact argument list is a best guess — verify with `meta.introspect`).
 * DisplayRect durations are capped at 2 s (26.1.5).
 * Several crash fixes for scripts calling FL functions "at the wrong time"
   (26.1.3, 26.1.7) — the bridge only ever calls FL from FL's own callbacks.
+* **No background tick for this script (26.1.7, verified).** FL never calls
+  `OnIdle`. `OnUpdateMeters` doesn't fire either, not even during playback
+  with `device.setHasMeters()` called in `OnInit`. The bridge runs only from
+  `OnMidiMsg`, which makes the MIDI wake port mandatory.
 
 ## Still not scriptable
 
