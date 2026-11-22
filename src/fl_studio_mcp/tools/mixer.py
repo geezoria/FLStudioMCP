@@ -3,10 +3,58 @@
 from __future__ import annotations
 
 import math
+import shutil
+import tempfile
+import time
+from pathlib import Path
 from typing import Any, Optional
 
+from .. import mix_doctor
 from ..bridge_client import get_client
 from ._meta import ToolRegistrar
+
+PEAK_SAMPLE_INTERVAL = 0.05
+METER_SETTLE = 0.3  # after a start, the meters still hold the last level heard
+
+
+def _watch_peaks(seconds: float, play: bool) -> tuple[dict[int, float], dict[int, str], int, bool]:
+    """Sample mixer.peaks for `seconds`, holding each track's loudest linear peak."""
+    seconds = min(120.0, max(1.0, float(seconds)))
+    client = get_client()
+    started = False
+    if play and not client.call("transport.status").get("is_playing"):
+        client.call("transport.start")
+        started = True
+    held: dict[int, float] = {}
+    names: dict[int, str] = {}
+    samples = 0
+    begin = time.monotonic()
+    try:
+        while time.monotonic() - begin < seconds:
+            result = client.call("mixer.peaks", include_silent=False)
+            if not started or time.monotonic() - begin >= METER_SETTLE:
+                samples += 1
+                for t in result.get("tracks", []):
+                    level = max(float(t.get("left") or 0), float(t.get("right") or 0))
+                    held[t["track"]] = max(held.get(t["track"], 0.0), level)
+                    names[t["track"]] = t.get("name")
+            time.sleep(PEAK_SAMPLE_INTERVAL)
+    finally:
+        if started:
+            client.call("transport.stop")
+    return held, names, samples, started
+
+
+def _stage_preset(preset: Path, data_system: str) -> Path | None:
+    """Copy a preset to the temp folder when that is on FL's drive: FL loads presets only
+    through a path relative to its Data/System folder, and none reaches another drive."""
+    staging = Path(tempfile.gettempdir()) / "fLMCP presets"
+    if not data_system or Path(data_system).drive.lower() != staging.drive.lower():
+        return None
+    staging.mkdir(parents=True, exist_ok=True)
+    target = staging / preset.name
+    shutil.copyfile(preset, target)
+    return target
 
 
 def register(tools: ToolRegistrar) -> None:
@@ -108,8 +156,15 @@ def register(tools: ToolRegistrar) -> None:
 
         entry = resolve(plugin, "effect")
         install = paths.fl_install_dir()
-        result = get_client().call("mixer.loadEffect", track=track, preset=str(entry.path),
-                                   fl_dir=str(install) if install else None)
+        client = get_client()
+        fl_dir = str(install) if install else None
+        result = client.call("mixer.loadEffect", track=track, preset=str(entry.path), fl_dir=fl_dir)
+        if result.get("other_drive"):
+            staged = _stage_preset(entry.path, str(result.get("data_system") or ""))
+            if staged is not None:
+                result = client.call("mixer.loadEffect", track=track, preset=str(staged), fl_dir=fl_dir)
+        result.pop("other_drive", None)
+        result.pop("data_system", None)
         result["plugin"] = entry.name
         return result
 
@@ -124,6 +179,53 @@ def register(tools: ToolRegistrar) -> None:
             level = max(float(t.get("left") or 0), float(t.get("right") or 0))
             t["peak_db"] = round(20 * math.log10(level), 1) if level > 0 else None
             t["clipping"] = level > 1.0
+        return result
+
+    @tools.write("Set Mixer Track Volume in dB", idempotent=True)
+    def mixer_set_volume_db(track: int, db: float) -> dict[str, Any]:
+        """Set a mixer fader to a level in dB (0 = unity; FL's faders go from -inf to about +5.6 dB).
+        Track 0 is Master. Returns the track with `volume_db` as FL now shows it, `clamped` (above
+        the fader's top) and `verified` (FL shows the requested level within 0.05 dB)."""
+        client = get_client()
+        result = client.call("mixer.setVolumeDb", track=track, db=db)
+        info = client.call("mixer.trackInfo", track=result["track"])
+        shown = info.get("volume_db")
+        expected = result.get("expected_db")
+        info["clamped"] = result.get("clamped", False)
+        info["verified"] = isinstance(shown, (int, float)) and (
+            shown == float("-inf") if expected is None else abs(shown - expected) <= 0.05)
+        if not info["verified"] and isinstance(shown, (int, float)) and db < -60 and shown < -60:
+            info["note"] = "FL's fader moves in steps too coarse to hit levels below about -60 dB exactly."
+        return info
+
+    @tools.read("Watch Mixer Peaks During Playback")
+    def mixer_peak_watch(seconds: float = 8.0, play: bool = True) -> dict[str, Any]:
+        """Listen for `seconds` (1-120) and report the loudest peak each mixer track reached, so
+        level decisions use the loud parts of the song, not one instant. With `play` it starts
+        playback if FL is stopped (and stops it again); FL plays the song or the pattern,
+        whichever its transport is set to. Peaks are in dBFS; `clipping` means above 0 dBFS."""
+        held, names, samples, started = _watch_peaks(seconds, play)
+        tracks = [{"track": t, "name": names.get(t), "peak": round(v, 4),
+                   "peak_db": mix_doctor.to_db(v), "clipping": v >= mix_doctor.CLIP}
+                  for t, v in sorted(held.items(), key=lambda kv: -kv[1])]
+        return {"seconds": seconds, "samples": samples, "started_playback": started, "tracks": tracks}
+
+    @tools.read("Diagnose Mix")
+    def mixer_diagnose(listen_seconds: float = 0.0) -> dict[str, Any]:
+        """Review the whole mix and list concrete problems, worst first. It checks clipping and
+        headroom on Master, hot inserts, inserts routed nowhere, solos left on, bypassed or
+        switched-off effects, muted inserts that carry channels, silent tracks, faders pushed up and
+        channels playing straight into Master. Each finding has `evidence`, a `fix`, and usually the
+        `tool` and `args` that apply it; apply fixes one at a time and only with the user's OK.
+        `listen_seconds` > 0 first plays and holds peaks for that long (see mixer_peak_watch); with
+        0, levels come from this instant and only if FL is playing. Changes nothing itself."""
+        held = None
+        if listen_seconds and listen_seconds > 0:
+            held, _names, _samples, _started = _watch_peaks(listen_seconds, True)
+        snapshot = get_client().call("mixer.snapshot")
+        result = mix_doctor.diagnose(snapshot, held)
+        if not snapshot.get("routing_known"):
+            result["note"] = "This FL can't read routes, so 'goes nowhere' isn't checked."
         return result
 
     @tools.write("Select Mixer Track", idempotent=True)

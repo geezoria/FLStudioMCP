@@ -5,10 +5,32 @@ All notable changes to fLMCP are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-23
+
+Mixing by measurement: a mix diagnosis, peaks held over playback, faders in dB
+and plugin parameters in their own units.
+
 ### Added
 
+- **`mixer_diagnose`** reviews the whole mix and lists problems worst first:
+  Master clipping or short on headroom, hot inserts, inserts that send nowhere,
+  solos left on, bypassed slots and switched-off FX chains, muted inserts that
+  carry channels, silent tracks, faders pushed above +3 dB and channels playing
+  straight into Master. Each finding carries its evidence, a fix and usually
+  the tool call that applies it. With `listen_seconds` it plays the song first
+  and judges the loudest moment, not one instant. The *Review a Mix* prompt
+  starts with it.
+- **`mixer_peak_watch`** plays for a few seconds (or listens to what's already
+  playing) and holds each track's loudest peak, in linear and dBFS.
+- **`plugin_set_param_value`** sets a plugin parameter to a value in its own
+  units, such as "-6 dB", "2.5 kHz", "120 ms" or "30%". The bridge searches
+  the normalized value whose display text matches, in one FL callback, and
+  reports `verified`, `clamped` and the parameter's range. It leaves
+  non-numeric parameters unchanged.
+- **`mixer_set_volume_db`** sets a fader in dB through FL's fader law and
+  checks what FL then shows (within 0.05 dB).
 - **Load effects into the mixer.** `mixer_load_effect` puts any effect from
-  FL's Plugin database (stock or a scanned VST/VST3/CLAP) into a track's next
+  FL's Plugin database (FL's own or any plugin the Plugin Manager scanned) into a track's next
   free FX slot, by name. `plugin_search` lists the database. The
   `ui.launchAudioEditor` trick comes from karl-andres/fl-studio-mcp#10.
 - **FX slot control.** `mixer_set_slot` turns a slot on or off and sets its
@@ -23,6 +45,18 @@ All notable changes to fLMCP are documented here. This project adheres to
 
 ### Fixed
 
+- `mixer_load_effect` loads presets from another drive than FL's (it copies
+  them to the temp folder first, because FL takes only relative paths), uses
+  the folder of the FL that runs the bridge rather than the registry's (which
+  every installed FL version shares), and resolves relative preset paths.
+- Resolving an effect by name matches names only, so "fruity delay" no longer
+  also matches "Fruity Reeverb 2" through its "Delay reverb" category. Only a
+  real "x64" suffix is stripped from plugin names ("Max64" stays).
+- `mixer_set_slot` and `mixer_set_slots_enabled` report the state they set,
+  because FL's readback lags within a call.
+- `transport_set_recording_options` is no longer marked idempotent: it can
+  toggle overdub.
+- A Windows API buffer is freed even when looking up the Documents folder fails.
 - The FL user data folder follows a Documents folder moved to OneDrive and the
   path in FL's registry settings. `FLMCP_USER_DATA_DIR` overrides it.
 

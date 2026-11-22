@@ -103,7 +103,7 @@ def register(tools: ToolRegistrar) -> None:
         loop_record and step_edit (null = not readable on this FL version)."""
         return get_client().call("transport.recordingOptions")
 
-    @tools.write("Set Recording Options", idempotent=True)
+    @tools.write("Set Recording Options")
     def transport_set_recording_options(
         metronome: Optional[bool] = None,
         countdown: Optional[bool] = None,

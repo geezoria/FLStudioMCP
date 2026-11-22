@@ -100,21 +100,22 @@ def register(mcp: MCPServer) -> None:
 
     @mcp.prompt(title="Review a Mix")
     def mix_check() -> str:
-        """Inspect faders, routing and EQ before proposing any mix changes."""
+        """Diagnose levels, routing and effects before proposing any mix changes."""
         return _START + dedent("""\
             Review the current mix. Start with a read-only pass.
 
-            1. Call mixer_all_tracks with include_empty=true and channel_all to
-               associate instruments with mixer inserts. Start with Master (track
-               0) and the named or routed inserts.
-            2. Use mixer_track_info and mixer_get_eq on those tracks. If available,
-               use plugin_list_mixer_track to identify loaded effects. Base gain
-               staging and EQ suggestions on the observed controls, and ask about
+            1. Call mixer_diagnose with listen_seconds=8 (it plays the song, holds
+               each track's loudest peak and stops again). Its findings list
+               clipping, headroom, routing, solo, bypass and fader problems, worst
+               first, each with evidence and the tool call that fixes it.
+            2. For context, use mixer_track_info and mixer_get_eq on the tracks
+               involved and plugin_list_mixer_track for their effects. Ask about
                audible issues where listening evidence is needed.
             3. Present prioritized suggestions with exact tracks and values and get
-               my agreement before changing anything. If approved, use
-               mixer_set_volume or mixer_set_eq_band as appropriate. Verify the same
-               tracks with mixer_track_info or mixer_get_eq after the changes.
+               my agreement before changing anything. Apply approved fixes one at a
+               time (mixer_set_volume_db for levels in dB, plugin_set_param_value
+               for effect settings in their own units), then run mixer_diagnose
+               again to confirm the problem is gone.
             """)
 
     @mcp.prompt(title="Project Overview")

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from fl_studio_mcp import bridge_client, midi_wake, paths, protocol
+from fl_studio_mcp import __version__, bridge_client, midi_wake, paths, protocol
 from fl_studio_mcp.bridge_client import BridgeClient, RPCError
 
 DEVICE_SCRIPT = Path(__file__).resolve().parents[1] / "fl_bridge" / "device_FLStudioMCP.py"
@@ -107,7 +107,7 @@ def test_idle_ping_echo_and_heartbeat(idle):
     client = BridgeClient()
     assert client.is_connected()
     ping = client.ping()
-    assert ping["bridge_version"] == "0.4.0"
+    assert ping["bridge_version"] == __version__
     assert ping["protocol"] == 2
     assert ping["api_version"] == 45
     assert ping["fl_version"] == "FL Studio 26.1.6"

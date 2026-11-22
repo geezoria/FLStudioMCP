@@ -1,6 +1,6 @@
 [project]
 name = "flmcp-studio"
-version = "0.4.0"
+version = "0.5.0"
 description = "The most complete MCP server for FL Studio 2024–2026: let Claude and other AI assistants compose, arrange and mix in FL Studio — 160+ tools, piano-roll writing, voice-to-MIDI and audio analysis."
 requires-python = ">=3.10"
 readme = "README.md"
