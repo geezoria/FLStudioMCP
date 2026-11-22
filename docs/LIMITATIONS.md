@@ -53,8 +53,8 @@ the error response to fall back gracefully.
   — FL's public API has no clip-level accessors.
 - ❌ `playlist_delete_marker` — not exposed.
 - ⚠️ `playlist_add_marker` — works via `arrangement.addAutoTimeMarker`.
-- ⚠️ `playlist_list_markers` — cannot enumerate; use
-  `arrangement_jump_marker(+1/-1)` to step through.
+- ⚠️ `playlist_list_markers` — names only (FL exposes no marker positions);
+  use `arrangement_jump_marker(+1/-1)` to step through them.
 - ⚠️ `playlist_refresh` — no general "repaint the playlist" function is exposed
   (FL repaints automatically); the tool is effectively a no-op that nudges
   performance-mode live clips where available.
@@ -82,9 +82,10 @@ the error response to fall back gracefully.
 
 ### Plugins
 - ✅ `plugin_is_valid / name / params / get_param / set_param / show_editor` —
-  all map to the public API on already-loaded plugins. Parameter set/get and the
-  value-string read correctly account for the `pickupMode` argument that sits
-  before `useGlobalIndex` in FL's signatures.
+  all map to the public API on already-loaded plugins. `setParamValue` takes
+  `pickupMode` before `useGlobalIndex`. `getParamValueString` takes 5 arguments
+  in the stubs but at most 4 on FL 26.1.7, and the bridge handles both. On a
+  sampler or an empty slot the tools return `no plugin at …` with a hint.
 - ✅ Preset navigation: `plugin_preset_count / next_preset / prev_preset`.
 - ❌ `plugin_set_preset` (jump to a numeric preset) — `plugins.setPreset` is not
   exposed by FL's public Python API. The tool returns a structured error

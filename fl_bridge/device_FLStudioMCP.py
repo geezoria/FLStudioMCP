@@ -1116,23 +1116,55 @@ def _resolve_plugin_loc(p):
     return index, slot, useGlobal
 
 
+def _plugin_target(p):
+    """(index, slot, useGlobal) of a loaded plugin, or (None, structured error)."""
+    idx, slot, ug = _resolve_plugin_loc(p)
+    if plugins.isValid(idx, slot, ug):
+        return (idx, slot, ug), None
+    where = ("channel %d" % idx) if ug else ("mixer track %d slot %d" % (idx, slot))
+    return None, {"ok": False, "error": "no plugin at " + where,
+                  "hint": "Samplers and audio clips have no plugin parameters. "
+                          "channel_info reports type 2 for plugin channels; "
+                          "plugin_list_mixer_track lists a mixer track's effect slots."}
+
+
+def _param_value_string(param, idx, slot, ug):
+    """plugins.getParamValueString. The stubs and older FL take (param, index, slot,
+    pickupMode, useGlobalIndex); FL 26.1.7 takes at most 4 arguments and raises
+    TypeError for 5. Try 5 first: 4 arguments on an older FL would silently pass
+    useGlobalIndex as pickupMode."""
+    try:
+        return plugins.getParamValueString(param, idx, slot, 0, ug)
+    except TypeError:
+        return plugins.getParamValueString(param, idx, slot, ug)
+
+
 def h_plugins_is_valid(p):
     idx, slot, ug = _resolve_plugin_loc(p)
     return {"valid": plugins.isValid(idx, slot, ug) == 1}
 
 
 def h_plugins_name(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     return {"name": plugins.getPluginName(idx, slot, 0, ug)}
 
 
 def h_plugins_param_count(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     return {"count": plugins.getParamCount(idx, slot, ug)}
 
 
 def h_plugins_params(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     limit = int(p.get("limit", 128))
     offset = int(p.get("offset", 0))
     n = plugins.getParamCount(idx, slot, ug)
@@ -1143,37 +1175,47 @@ def h_plugins_params(p):
                 "idx": i,
                 "name": plugins.getParamName(i, idx, slot, ug),
                 "value": plugins.getParamValue(i, idx, slot, ug),
-                # getParamValueString has a pickupMode arg BEFORE useGlobalIndex.
-                "value_string": plugins.getParamValueString(i, idx, slot, 0, ug),
+                "value_string": _param_value_string(i, idx, slot, ug),
             })
-        except Exception:
-            pass
+        except Exception as e:
+            out.append({"idx": i, "error": "%s: %s" % (type(e).__name__, e)})
     return {"total": n, "params": out}
 
 
 def h_plugins_get_param(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     pid = int(p["param"])
     return {
         "value": plugins.getParamValue(pid, idx, slot, ug),
-        "value_string": plugins.getParamValueString(pid, idx, slot, 0, ug),
+        "value_string": _param_value_string(pid, idx, slot, ug),
     }
 
 
 def h_plugins_set_param(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     pid = int(p["param"]); v = float(p["value"])
     # setParamValue(value, paramIndex, index, slotIndex, pickupMode, useGlobalIndex)
     # — pickupMode comes BEFORE useGlobalIndex; keep pickup off (0).
     plugins.setParamValue(v, pid, idx, slot, 0, ug)
+    # Mixer effects report the old getParamValue until the next callback, while
+    # the value string is already current (FL 26.1.7), so echo the value set.
     return {
-        "value": plugins.getParamValue(pid, idx, slot, ug),
-        "value_string": plugins.getParamValueString(pid, idx, slot, 0, ug),
+        "value": v,
+        "value_string": _param_value_string(pid, idx, slot, ug),
     }
 
 
 def h_plugins_find_param(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     needle = (p.get("name_contains") or "").lower()
     n = plugins.getParamCount(idx, slot, ug)
     hits = []
@@ -1189,18 +1231,27 @@ def h_plugins_find_param(p):
 
 
 def h_plugins_preset_count(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     return {"count": plugins.getPresetCount(idx, slot, ug)}
 
 
 def h_plugins_next_preset(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     plugins.nextPreset(idx, slot, ug)
     return {"ok": True}
 
 
 def h_plugins_prev_preset(p):
-    idx, slot, ug = _resolve_plugin_loc(p)
+    target, error = _plugin_target(p)
+    if error:
+        return error
+    idx, slot, ug = target
     plugins.prevPreset(idx, slot, ug)
     return {"ok": True}
 
@@ -1341,11 +1392,26 @@ def h_playlist_refresh(_):
                     "function is exposed by the public Python API."}
 
 
+MAX_MARKERS = 256
+
+
 def h_playlist_list_markers(_):
-    """FL's public API cannot enumerate existing markers — only jumpToMarker steps through them."""
-    return {"markers": [],
-            "ok": False,
-            "note": "arrangement.* does not expose marker enumeration; use playlist_jump_marker instead."}
+    """Marker names by absolute index. FL exposes names only, not positions; an
+    index past the last marker returns an empty name."""
+    if not hasattr(arrangement, "getMarkerName"):
+        return _unsupported("Marker listing", "arrangement.getMarkerName")
+    names = []
+    for i in range(MAX_MARKERS):
+        try:
+            name = arrangement.getMarkerName(i)
+        except Exception:
+            break
+        if not name:
+            break
+        names.append({"index": i, "name": name})
+    return {"ok": True, "markers": names,
+            "note": "FL reports marker names only, not their positions; "
+                    "arrangement_jump_marker moves the playhead to them."}
 
 
 def h_playlist_add_marker(p):

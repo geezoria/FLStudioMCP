@@ -140,7 +140,7 @@ Groups can be selected with `FLMCP_TOOLSETS` (see the README).
 | `playlist_place_pattern` | track, pattern, position_bars, length_bars? | write | Request placement of a pattern at a bar offset. The public FL API currently requires manual placement. |
 | `playlist_delete_clip` | track, position_bars | write ⚠ | Request deletion of a clip at a bar offset. The public FL API currently requires manual deletion. |
 | `playlist_refresh` |  | write | Force playlist repaint (use after bulk edits). |
-| `playlist_list_markers` |  | read | Check timeline marker enumeration. The public FL API currently returns an availability note. |
+| `playlist_list_markers` |  | read | List timeline marker names in order (index 0 first). FL exposes no marker positions; use arrangement_jump_marker to move the playhead to them. |
 | `playlist_add_marker` | position_bars, name? | write | Add a named timeline marker at a bar offset from the start (four quarter notes per bar). |
 | `playlist_delete_marker` | index | write ⚠ | Request removal by timeline marker index. The public FL API currently requires manual deletion. |
 

@@ -108,6 +108,18 @@ command.
   Verified on FL 26.1.7: a mixer-volume ramp recorded into the pattern and
   played back. The heartbeat reports the recorder's state, and the client
   keeps waking FL until the run ends.
+- Plugin tools work on FL 2026. `plugins.getParamValueString` takes at most 4
+  arguments there, not the 5 in the API stubs, so `plugin_get_param` and
+  `plugin_set_param` failed with a `TypeError`. `plugin_params` swallowed the
+  same error and returned an empty list. The bridge now handles both forms, and
+  `plugin_params` reports a failing parameter instead of dropping it. On a
+  sampler or an empty slot the tools return `no plugin at …` with a hint.
+  `plugin_set_param` returns the value it set, because FL reports a mixer
+  effect's old value until the next callback. Verified on FLEX and on
+  Emphasizer.
+- `playlist_list_markers` lists marker names through
+  `arrangement.getMarkerName`. It used to return nothing. FL exposes no marker
+  positions.
 - "Operation unsafe at current time" errors now name the FL dialog that is in
   the way (Windows). `transport_record` reports when the record prompt opened,
   and `ui_focused_window` returns `focused_form_caption`.

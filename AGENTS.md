@@ -62,7 +62,10 @@ before calling work done.
   are 1-based; mixer track 0 is Master; playlist tracks are 1-based.
 - **Argument order:** many getters/setters take `pickupMode` *before*
   `useGlobalIndex` (`plugins.setParamValue(value, param, index, slot, pickupMode, useGlobalIndex)`).
-  Check the stubs and don't guess.
+  Check the stubs and don't guess. The stubs can also be wrong:
+  `plugins.getParamValueString` takes at most 4 arguments on FL 26.1.7, not the
+  stubs' 5. Tests against the stubs can't catch that, so check new plugin and
+  mixer calls live.
 - **Colors:** FL stores them as `0xRRGGBB`. Use the bridge's color helpers.
 - **`channels.setChannelPitch` mode 2 is broken.** Use mode 1 (cents).
 - **Edits should be undoable.** Prefer `general.processRECEvent(..., REC_UpdateValue | REC_UpdateControl ...)`
