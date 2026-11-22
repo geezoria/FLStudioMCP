@@ -74,6 +74,19 @@ before calling work done.
 - **Not scriptable at all:** placing or deleting playlist clips, loading
   plugins into slots, opening or creating projects, rendering without UI. See
   `docs/LIMITATIONS.md`. Don't promise these.
+- **No background tick on FL 2026.** FL 26.1.7 calls neither `OnIdle` nor
+  `OnUpdateMeters` for the bridge, so commands only run when the MIDI wake (CC 119,
+  ch 16 on the `fLMCP` port) fires `OnMidiMsg`. Anything "async" (automation
+  recording) advances on wakes, not on a timer.
+- **Focused plugins steal the transport.** `transport.start/stop/record` act on a
+  focused plugin window that has its own transport (Edison). Call the bridge's
+  `_song_transport()` before driving the song transport.
+- **Controller assignment lives in the registry** (Windows):
+  `HKCU\Software\Image-Line\FL Studio <N>\Devices\MIDI input\<port>` needs
+  `Type="-3"` (script), `ScriptFolder="fLMCP Bridge"`, `Enabled="1"`. With any other
+  `Type`, FL ignores `ScriptFolder`.
+- **One FL at a time.** Two FL processes share the bridge folder, race for
+  commands and can both execute one call. `doctor` warns about it.
 - `meta.introspect` (via `fl_call_raw`) dumps every callable and docstring the
   running FL exposes. Use it as ground truth when the stubs and reality
   disagree.
