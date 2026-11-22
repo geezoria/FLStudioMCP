@@ -81,6 +81,15 @@ before calling work done.
 - **Focused plugins steal the transport.** `transport.start/stop/record` act on a
   focused plugin window that has its own transport (Edison). Call the bridge's
   `_song_transport()` before driving the song transport.
+- **Arming Record opens a prompt.** Unless the user ticked "Don't show this in
+  the future", `transport.record()` opens FL's modal "Recording" dialog ("What
+  would you like to record?"). While it is open, `ui.getFocusedFormCaption()`
+  returns `"Recording"`, `isRecording()` reports 1, and every edit raises
+  "Operation unsafe at current time". `transport.start()` closes it **and cancels
+  the arm**, and so does calling `start()` in the same callback that armed.
+  `start()` toggles play/pause, and `isPlaying`/`isRecording` lag within a
+  callback. The automation recorder is a state machine over ticks for this
+  reason. The server answers the prompt on Windows (`fl_windows.py`).
 - **Controller assignment lives in the registry** (Windows):
   `HKCU\Software\Image-Line\FL Studio <N>\Devices\MIDI input\<port>` needs
   `Type="-3"` (script), `ScriptFolder="fLMCP Bridge"`, `Enabled="1"`. With any other

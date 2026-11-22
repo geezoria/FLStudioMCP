@@ -80,6 +80,14 @@ the exact argument list is a best guess — verify with `meta.introspect`).
   `OnIdle`. `OnUpdateMeters` doesn't fire either, not even during playback
   with `device.setHasMeters()` called in `OnInit`. The bridge runs only from
   `OnMidiMsg`, which makes the MIDI wake port mandatory.
+* **Record prompt (26.1.7, verified).** Arming Record while stopped or playing
+  opens the modal "Recording" dialog ("What would you like to record?") unless
+  it was turned off. While it is open, `ui.getFocusedFormCaption()` is
+  `"Recording"`, `ui.getFocusedFormID()` is -1, `transport.isRecording()` is 1,
+  and edits raise "Operation unsafe at current time". `transport.start()`
+  closes it and cancels the arm. `record()` followed by `start()` in one
+  callback also cancels the arm. Disarming shows no prompt. No API reads or sets
+  the recording filter.
 
 ## Still not scriptable
 

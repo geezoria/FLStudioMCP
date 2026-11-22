@@ -118,7 +118,8 @@ error: "...not available"}` rather than raising.
 
 ### Automation
 - `automation_record_*` record **live** automation clips: the bridge arms +
-  plays the transport and writes values at the right musical times. This is
+  plays the transport and writes values at the right musical times, counted
+  from when playback starts. This is
   **asynchronous and non-blocking** — the tool returns immediately
   (`{"mode": "async", "scheduled": N}`) and the clip finishes on its own a few
   seconds later. FL's UI stays responsive throughout (earlier versions slept
@@ -173,3 +174,10 @@ Record button). *Automation* must be on. If *Audio, into Edison* is also on, FL
 opens Edison on the selected mixer track and records audio as well. The
 Python API can't read or change the filter. In Song mode with an empty
 playlist, FL loops the first bar ("Song jump") until the recording ends.
+In Pattern mode the values go into the current pattern, which loops, so keep
+the points within the pattern's length.
+
+Arming Record makes FL ask "What would you like to record?" unless *Don't show
+this in the future* was ticked. On Windows the tools answer *Notes and
+automation* themselves. On macOS, answer it in FL within 20 s, or the
+recording is cancelled. Ticking that box removes the prompt for good.

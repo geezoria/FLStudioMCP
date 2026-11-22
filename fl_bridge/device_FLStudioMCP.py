@@ -89,7 +89,8 @@ _last_command = None
 _processing = False
 _pending_response = None
 _auto_jobs = []          # pending non-blocking automation jobs (see automation section)
-_auto_recording = False  # True while an automation clip is being recorded live
+_auto_state = None       # None, "arm", "start", "roll" or "finish" (see _process_automation)
+_auto_since = 0.0        # monotonic time when _auto_state last changed
 
 
 # ----------------------------------------------------------------------------
@@ -200,6 +201,7 @@ def _bridge_status():
         "fl_version": fl_version if isinstance(fl_version, str) and fl_version else "unknown",
         "idle_calls": _idle_calls,
         "midi_wakes": _midi_wakes,
+        "automation": _auto_state,
     }
 
 
@@ -1423,72 +1425,145 @@ def _rec_tempo(bpm):
     )
 
 
+# Arming Record makes FL ask "What would you like to record?" in a modal
+# "Recording" dialog, unless the user ticked "Don't show this in the future".
+# While it is open every edit raises "Operation unsafe at current time", and
+# transport.start() closes it and cancels the arm. Starting in the same callback
+# that armed Record cancels the arm too. Verified on FL 26.1.7. So the recording
+# arms in one tick, waits for the prompt to be answered (the MCP server answers it
+# on Windows), starts playback in a later tick, and times points from there.
+RECORD_PROMPT_CAPTION = "Recording"
+AUTO_START_TIMEOUT = 20.0   # seconds to wait for the prompt and for playback to start
+AUTO_ARM_SETTLE = 0.3       # seconds between arming and starting (the prompt appears late)
+AUTO_LATE_LIMIT = 2.0       # seconds an "unsafe" point is retried past its time
+
+
+def _set_auto_state(state):
+    global _auto_state, _auto_since, _last_heartbeat
+    _auto_state = state
+    _auto_since = time.monotonic()
+    if state is None:
+        _last_heartbeat = float("-inf")   # report "done" in this tick's heartbeat
+
+
+def _record_prompt_open():
+    if not hasattr(ui, "getFocusedFormCaption"):
+        return False
+    return _safe(ui.getFocusedFormCaption) == RECORD_PROMPT_CAPTION
+
+
+def _abort_automation(reason):
+    _log("automation aborted: %s" % reason)
+    del _auto_jobs[:]
+    _set_auto_state("finish")
+
+
 def _enqueue_automation(points, apply_value, value_key="value", label=""):
     """Schedule `points` ([{time_bars, <value_key>}]) for callback processing.
     `apply_value(float)` writes one value. Returns immediately."""
-    global _auto_recording
     if not points:
         return {"ok": False, "error": "no points"}
     try:
         spb = _seconds_per_bar()
-        start = time.monotonic()
         sched = []
         for pt in points:
             t_bars = max(0.0, float(pt.get("time_bars", 0.0)))
-            val = float(pt[value_key])
-            sched.append((start + t_bars * spb, val))
+            sched.append((t_bars * spb, float(pt[value_key])))
         sched.sort(key=lambda x: x[0])
+        job = {"sched": sched, "idx": 0, "apply": apply_value, "label": label, "t0": None}
 
-        if not _auto_recording:
+        if _auto_state in (None, "finish"):
             _song_transport()
-            transport.record()   # arm
-            transport.start()    # roll
-            _auto_recording = True
-        _auto_jobs.append({"sched": sched, "idx": 0, "apply": apply_value, "label": label})
-        _process_automation()    # points at time 0 apply now, not on the next wake
+            if transport.isRecording() == 0:
+                transport.record()   # arm; FL may now show its "Recording" prompt
+            _set_auto_state("arm")
+        elif _auto_state == "roll":
+            job["t0"] = time.monotonic()
+        _auto_jobs.append(job)
         total_bars = max((float(pt.get("time_bars", 0.0)) for pt in points), default=0.0)
         return {
             "ok": True,
             "scheduled": len(sched),
             "label": label,
             "approx_duration_sec": round(total_bars * spb, 2),
+            "start_timeout_sec": AUTO_START_TIMEOUT,
             "mode": "async",
-            "note": "Recording live without blocking FL's UI; the clip finishes "
-                    "automatically after the last point. FL records what its "
-                    "recording filter allows (right-click Record): 'Automation' "
-                    "must be on, and with 'Audio into Edison' on FL also opens "
-                    "Edison and records audio.",
+            "note": "Recording live without blocking FL's UI; playback starts once "
+                    "Record is armed and the clip finishes after the last point. "
+                    "FL records what its recording filter allows (right-click "
+                    "Record): 'Automation' must be on, and with 'Audio into Edison' "
+                    "on FL also opens Edison and records audio.",
         }
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
 
 
-def _process_automation():
-    """Apply any due automation points and stop recording when all jobs finish.
-    Called from idle and MIDI wake callbacks. Never sleeps."""
-    global _auto_recording
-    if not _auto_jobs:
-        return
-    now = time.monotonic()
+def _apply_due_points(now):
     for job in _auto_jobs:
         sched = job["sched"]
-        apply_value = job["apply"]
-        while job["idx"] < len(sched) and sched[job["idx"]][0] <= now:
+        while job["idx"] < len(sched) and job["t0"] + sched[job["idx"]][0] <= now:
             try:
-                apply_value(sched[job["idx"]][1])
+                job["apply"](sched[job["idx"]][1])
             except Exception as e:
+                late = now - (job["t0"] + sched[job["idx"]][0])
+                if "unsafe" in str(e).lower() and late < AUTO_LATE_LIMIT:
+                    break   # FL is busy (dialog, plugin loading); retry next tick
                 _log("automation apply (%s) failed: %s" % (job.get("label"), e))
             job["idx"] += 1
-    # Drop finished jobs.
     _auto_jobs[:] = [j for j in _auto_jobs if j["idx"] < len(j["sched"])]
-    if not _auto_jobs and _auto_recording:
-        try:
+
+
+def _process_automation():
+    """Advance the live automation recording. Runs on every bridge tick, never sleeps.
+
+    States: "arm" (Record was armed during this tick), "start" (waiting for the
+    record prompt to be answered), "starting" (playback requested), "roll"
+    (applying points), "finish" (stopping playback and disarming Record)."""
+    if _auto_state is None:
+        return
+    now = time.monotonic()
+    waited = now - _auto_since
+    try:
+        if _auto_state == "arm":
+            _set_auto_state("start")
+        elif _auto_state == "start":
+            if _record_prompt_open():
+                if waited > AUTO_START_TIMEOUT:
+                    _abort_automation("FL's 'What would you like to record?' prompt "
+                                      "was not answered")
+            elif waited < AUTO_ARM_SETTLE:
+                pass    # give the prompt time to appear before touching the transport
+            elif transport.isRecording() == 0:
+                _abort_automation("Record is not armed (the record prompt was closed?)")
+            else:
+                _song_transport()
+                if transport.isPlaying() == 0:
+                    transport.start()   # toggles play/pause, so only once
+                _set_auto_state("starting")
+        elif _auto_state == "starting":
+            if transport.isPlaying() == 1:
+                for job in _auto_jobs:
+                    job["t0"] = now
+                _set_auto_state("roll")
+            elif waited > AUTO_START_TIMEOUT:
+                _abort_automation("playback did not start")
+        if _auto_state == "roll":
+            _apply_due_points(now)
+            if not _auto_jobs:
+                _set_auto_state("finish")
+        if _auto_state == "finish":
             _song_transport()
-            transport.stop()
-            transport.record()  # disarm
-        except Exception:
-            pass
-        _auto_recording = False
+            if transport.isPlaying() == 1:
+                transport.stop()
+            if transport.isRecording() == 1:
+                transport.record()  # disarm; never toggles Record on
+            _set_auto_state(None)
+    except Exception as e:
+        # Usually "Operation unsafe" while FL is busy: retry on the next tick.
+        if waited > AUTO_START_TIMEOUT:
+            _log("automation gave up in state %s: %s" % (_auto_state, e))
+            del _auto_jobs[:]
+            _set_auto_state(None)
 
 
 def h_automation_record_tempo(p):
@@ -1653,6 +1728,8 @@ def h_ui_focused(_):
         "focused_window": focused_name,
         "window_id": focused_id,
         "focused_form_id": _safe(ui.getFocusedFormID),
+        "focused_form_caption": (_safe(ui.getFocusedFormCaption)
+                                 if hasattr(ui, "getFocusedFormCaption") else None),
         "in_popup_menu": bool(_safe(ui.isInPopupMenu) == 1),
     }
 
