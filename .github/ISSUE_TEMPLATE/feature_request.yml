@@ -1,0 +1,16 @@
+name: Feature request
+description: A tool, workflow or FL Studio feature you would like the assistant to control
+labels: [enhancement]
+body:
+  - type: textarea
+    id: want
+    attributes:
+      label: What would you like to do?
+      description: Describe it as a musician — e.g. "ask it to sidechain the bass to the kick".
+    validations:
+      required: true
+  - type: textarea
+    id: fl-api
+    attributes:
+      label: FL Studio API (if you know it)
+      description: Which FL Studio scripting function would make this possible? See docs/FL_API_2026.md.
