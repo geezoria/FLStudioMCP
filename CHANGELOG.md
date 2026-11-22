@@ -3,7 +3,9 @@
 All notable changes to fLMCP are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [0.4.0] — Unreleased
+## [Unreleased]
+
+## [0.4.0] — 2026-11-22
 
 Works on FL Studio 2025 and 2026 again, on MCP SDK 2.x, and installs with one
 command.
@@ -76,7 +78,7 @@ command.
 - `scripts/live_check.py` (replaces `smoke_test.py`) runs every read-only tool
   against a running FL through the real MCP server. With `--write` it also runs
   the edits, each one restored afterwards, a pattern lifecycle, and every
-  piano-roll tool on a scratch pattern. 103 checks pass on FL 26.1.7.
+  piano-roll tool on a scratch pattern. 104 checks pass on FL 26.1.7.
 
 ### Changed
 
