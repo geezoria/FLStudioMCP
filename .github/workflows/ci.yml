@@ -60,3 +60,18 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  mcpb:
+    name: Claude Desktop bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx -y @anthropic-ai/mcpb validate mcpb/manifest.json
+      - run: npx -y @anthropic-ai/mcpb pack mcpb flmcp.mcpb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpb
+          path: flmcp.mcpb

@@ -82,6 +82,16 @@ tool says the edits are queued.
 uvx flmcp doctor
 ```
 
+### Claude Desktop: one-click bundle
+
+Each [release](https://github.com/geezoria/FLStudioMCP/releases) has a
+`flmcp-<version>.mcpb` file. Double-click it (or drag it onto *Settings →
+Extensions* in Claude Desktop) to add the server without editing any config.
+Claude Desktop runs it with uv and lets you pick the tool groups and the
+timeout in the extension's settings. You still need the FL side once: close
+FL Studio, run `uvx flmcp install --no-clients`, and start FL again. To build
+the bundle yourself: `npx @anthropic-ai/mcpb pack mcpb`.
+
 ### Other clients / manual config
 
 `uvx flmcp config` prints ready-to-paste snippets for every client. The

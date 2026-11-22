@@ -14,6 +14,7 @@ in **three different Python environments**. Know which one you are editing:
 | `src/fl_studio_mcp/` | The user's Python ≥ 3.10, as a stdio MCP server | Normal Python. Depends on `mcp>=2.3,<3`. **Never print to stdout** — stdout is the MCP channel; log with `logging`. |
 | `fl_bridge/device_FLStudioMCP.py` | Inside FL Studio, as a MIDI controller script (Python 3.12, sandboxed) | Only the standard library plus FL modules. **No threads, sockets, subprocess or `os.remove/replace/stat/mkdir`.** Only `open()` I/O. Never block or sleep: every callback runs on FL's UI thread. Must keep working on FL 2024 (API 3x) through FL 2026 (API 45). |
 | `fl_bridge/piano_roll/ComposeWithLLM.pyscript` | FL's piano roll, when triggered | The only place `flpianoroll` exists. |
+| `mcpb/` | Claude Desktop, as a `.mcpb` bundle run by uv | Only a manifest, an icon and a 3-line `src/server.py` that starts the PyPI `flmcp` package. No code of its own. |
 
 The server and the bridge talk through JSON files (protocol 2). See
 `docs/ARCHITECTURE.md` before touching `bridge_client.py`, `protocol.py`,
@@ -134,9 +135,13 @@ and run `live_check.py --write` too: the stubs can't tell you what FL really doe
 
 ## Releasing
 
-1. Bump `version` in `pyproject.toml`, `__version__` in
-   `src/fl_studio_mcp/__init__.py`, `BRIDGE_VERSION` in the bridge, and both
-   version fields in `server.json`.
+1. Bump the version everywhere `tests/test_release_metadata.py` checks:
+   `version` in `pyproject.toml`, `__version__` in
+   `src/fl_studio_mcp/__init__.py`, `BRIDGE_VERSION` in the bridge, both
+   version fields in `server.json`, `version` in `mcpb/manifest.json`, and
+   `version` plus the `flmcp==` pin in `mcpb/pyproject.toml`.
 2. Move *Unreleased* to a dated section in `CHANGELOG.md`.
-3. Tag `vX.Y.Z`. Publishing to PyPI and the MCP Registry is done by the
-   maintainer.
+3. Tag `vX.Y.Z`. The maintainer publishes to PyPI and the MCP Registry, then
+   attaches `flmcp-X.Y.Z.mcpb` (`npx @anthropic-ai/mcpb pack mcpb`, or CI's
+   `mcpb` artifact) to the GitHub release. The bundle installs the pinned
+   version from PyPI, so attach it only after the upload.
