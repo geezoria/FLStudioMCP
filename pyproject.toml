@@ -1,18 +1,19 @@
 [project]
-name = "fl-studio-mcp"
+name = "flmcp"
 version = "0.4.0"
-description = "Comprehensive Model Context Protocol server for FL Studio — full control over transport, patterns, channels, mixer, plugins, piano roll, playlist, arrangement, automation and rendering, plus voice-to-MIDI and audio-file analysis."
+description = "The most complete MCP server for FL Studio 2024–2026: let Claude and other AI assistants compose, arrange and mix in FL Studio — 160 tools, piano-roll writing, voice-to-MIDI and audio analysis."
 requires-python = ">=3.10"
 readme = "README.md"
 license = { text = "MIT" }
-authors = [{ name = "fLMCP" }]
-keywords = ["fl-studio", "mcp", "model-context-protocol", "midi", "daw", "music", "claude", "llm"]
+authors = [{ name = "geezoria" }]
+keywords = ["fl-studio", "fl studio", "mcp", "model-context-protocol", "mcp-server", "midi", "daw", "music-production", "claude", "ai", "llm"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -29,7 +30,7 @@ dependencies = [
 # Heavy, optional dependencies. The core MCP server (transport, mixer, channels,
 # plugins, patterns, piano roll, generators) runs WITHOUT any of these — they are
 # imported lazily, only when a voice-to-MIDI or audio-analysis tool is actually
-# called. Install with:  pip install "fl-studio-mcp[audio]"
+# called. Install with:  pip install "flmcp[audio]"
 [project.optional-dependencies]
 audio = [
     "numpy>=1.23",
@@ -72,9 +73,11 @@ dev = [
 Homepage = "https://github.com/geezoria/FLStudioMCP"
 Repository = "https://github.com/geezoria/FLStudioMCP"
 Issues = "https://github.com/geezoria/FLStudioMCP/issues"
+Changelog = "https://github.com/geezoria/FLStudioMCP/blob/main/CHANGELOG.md"
 
 [project.scripts]
-fl-studio-mcp = "fl_studio_mcp.server:main"
+flmcp = "fl_studio_mcp.cli:main"
+fl-studio-mcp = "fl_studio_mcp.cli:main"  # legacy alias
 
 [build-system]
 requires = ["hatchling"]
@@ -82,6 +85,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fl_studio_mcp"]
+
+# Ship the FL-side scripts inside the wheel so `flmcp install` works from PyPI/uvx.
+[tool.hatch.build.targets.wheel.force-include]
+"fl_bridge/device_FLStudioMCP.py" = "fl_studio_mcp/fl_bridge/device_FLStudioMCP.py"
+"fl_bridge/piano_roll/ComposeWithLLM.pyscript" = "fl_studio_mcp/fl_bridge/piano_roll/ComposeWithLLM.pyscript"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "fl_bridge", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE", "server.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

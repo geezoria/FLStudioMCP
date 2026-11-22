@@ -70,7 +70,7 @@ def test_mcp_discovery_and_pure_tool():
         async with Client(build_app(), mode="legacy") as client:
             assert client.server_info is not None
             assert client.server_info.title == "fLMCP — FL Studio MCP"
-            assert client.server_info.version == __version__ == version("fl-studio-mcp")
+            assert client.server_info.version == __version__ == version("flmcp")
             assert client.server_info.website_url == "https://github.com/geezoria/FLStudioMCP"
 
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}

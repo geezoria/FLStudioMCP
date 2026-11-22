@@ -58,7 +58,7 @@ def ensure_audio_deps(need_mic: bool = False) -> str | None:
     if missing:
         return (
             "audio dependencies not installed: " + ", ".join(missing) + ". "
-            "Install them with:  pip install \"fl-studio-mcp[audio]\"  "
+            "Install them with:  pip install \"flmcp[audio]\"  "
             "(or re-run scripts/install_windows.ps1)."
         )
     return None
@@ -75,7 +75,7 @@ def ensure_polyphonic_deps() -> str | None:
     except Exception:
         return (
             "polyphonic transcription needs Spotify Basic Pitch (not installed). "
-            "Install it with:  pip install \"fl-studio-mcp[polyphonic]\"  "
+            "Install it with:  pip install \"flmcp[polyphonic]\"  "
             "(pulls the model + an inference runtime; ~tens of MB)."
         )
     return None

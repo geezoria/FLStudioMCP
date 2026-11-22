@@ -126,7 +126,7 @@ def test_ensure_polyphonic_deps_contract():
         assert res is None
     else:
         assert isinstance(res, str)
-        assert "fl-studio-mcp[polyphonic]" in res
+        assert "flmcp[polyphonic]" in res
 
 
 def test_tools_expose_polyphonic_flag(monkeypatch):
