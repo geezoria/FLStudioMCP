@@ -142,6 +142,9 @@ async def writes(c: Check, seen: dict[str, dict]) -> None:
                    {"index": 0, "muted": ch["is_muted"]}, lambda: _same(channel("is_muted"), not ch["is_muted"]))
     await restored(c, "channel_solo", {"index": 0, "solo": not ch["is_solo"]},
                    {"index": 0, "solo": ch["is_solo"]})
+    mutes = [x["is_muted"] for x in seen["channel_all"]["channels"]]
+    now = [x["is_muted"] for x in (await c.call("channel_all"))["channels"]]
+    c.record("channel_solo (mutes restored)", now == mutes, f"before {mutes}, after {now}")
     await restored(c, "channel_route_to_mixer", {"index": 0, "mixer_track": top},
                    {"index": 0, "mixer_track": ch["fx_track"]}, lambda: _same(channel("fx_track"), top))
     out_of_range = await c.call("channel_route_to_mixer", index=0, mixer_track=top + 1)
@@ -304,5 +307,6 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true", help="show the server's log, tracebacks included")
     options = parser.parse_args()
     # One check provokes an error on purpose; keep its traceback out of the report.
-    logging.basicConfig(level=logging.INFO if options.verbose else logging.CRITICAL)
+    if not options.verbose:
+        logging.disable(logging.ERROR)
     sys.exit(run(main, options))

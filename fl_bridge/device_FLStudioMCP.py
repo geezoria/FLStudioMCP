@@ -401,8 +401,11 @@ def _with_refocus(result, refocused):
 
 def h_transport_start(_):
     refocused = _song_transport()
+    # start() toggles play/pause, and isPlaying() still reports the old state
+    # until the next callback, so report the state start() switched to.
+    was_playing = transport.isPlaying() == 1
     transport.start()
-    return _with_refocus({"is_playing": transport.isPlaying() == 1}, refocused)
+    return _with_refocus({"is_playing": not was_playing}, refocused)
 
 
 def h_transport_stop(_):
@@ -820,8 +823,15 @@ def h_channels_solo(p):
     # soloChannel has no value arg (toggle only), so honour an explicit desired
     # state by toggling only when it differs from the current state.
     is_solo = channels.isChannelSolo(idx, True) == 1
-    if solo is None or bool(solo) != is_solo:
+    want = (not is_solo) if solo is None else bool(solo)
+    if want != is_solo:
         channels.soloChannel(idx, True)
+    if is_solo and not want and channels.isChannelSolo(idx, True) == 1:
+        # FL 26.1.7: soloChannel() solos (mutes every other channel), but a
+        # second call doesn't unsolo. A solo is just "the one unmuted channel",
+        # so unsolo the way FL's UI does: unmute every channel.
+        for i in range(channels.channelCount(True)):
+            channels.muteChannel(i, 0, True)
     return {"index": idx, "is_solo": channels.isChannelSolo(idx, True) == 1}
 
 
