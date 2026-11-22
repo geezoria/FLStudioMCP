@@ -16,7 +16,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: The tag matches the package version
         run: |
           version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
@@ -24,20 +24,20 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $version"
             exit 1
           fi
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: uv build
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Pack the Claude Desktop bundle
         run: |
           mkdir bundle
           npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb "bundle/flmcp-${GITHUB_REF_NAME#v}.mcpb"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bundle
           path: bundle/
@@ -51,7 +51,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -66,7 +66,7 @@ jobs:
     env:
       MCP_PUBLISHER_VERSION: v1.8.9
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Wait until PyPI serves the release
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -100,12 +100,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: bundle
           path: bundle/
