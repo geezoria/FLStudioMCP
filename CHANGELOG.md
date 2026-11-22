@@ -98,6 +98,13 @@ command.
   can have fewer than 125. FL raised a bare "Index out of range" for most
   calls, and `channel_route_to_mixer` silently routed to the last insert
   instead.
+- `channel_solo` can unsolo. On FL 26.1.7 a second `soloChannel()` call
+  doesn't undo a solo, so the other channels stayed muted. The bridge now
+  unmutes every channel, as FL's own Solo button does. Found by an end-to-end
+  run through Claude Code.
+- `transport_play` reports the state it switched to. FL's `isPlaying()` lags
+  within a callback, so the tool used to answer `is_playing: false` right after
+  starting playback.
 - When ComposeWithLLM doesn't answer, the piano-roll tools empty the request
   queue. Queued edits used to run on the next unrelated script run.
 - `pattern_clear` no longer returns `cleared: false` after a successful clear.

@@ -423,3 +423,21 @@ def test_mixer_handlers_reject_tracks_beyond_this_projects_inserts(monkeypatch):
     assert calls == []  # FL would have clamped 101 to 16 silently
     bridge._HANDLERS["channels.routeToMixer"]({"index": 0, "mixer_track": 16})
     assert calls == [(0, 16)]
+
+
+def test_channel_unsolo_unmutes_every_channel(monkeypatch):
+    # FL 26.1.7's soloChannel() can solo but not unsolo; the bridge unmutes all.
+    muted = {0: 0, 1: 1, 2: 1}
+    monkeypatch.setattr(bridge.channels, "channelCount", lambda *a: 3)
+    monkeypatch.setattr(bridge.channels, "isChannelMuted", lambda i, *a: muted[i])
+    monkeypatch.setattr(bridge.channels, "isChannelSolo",
+                        lambda i, *a: int(not muted[i] and all(muted[j] for j in muted if j != i)))
+    monkeypatch.setattr(bridge.channels, "soloChannel", lambda *a: None)  # no-op, as in FL
+
+    def mute(i, value=-1, use_global=False):
+        assert use_global is True
+        muted[i] = (1 - muted[i]) if value == -1 else value
+
+    monkeypatch.setattr(bridge.channels, "muteChannel", mute)
+    assert bridge._HANDLERS["channels.solo"]({"index": 0, "solo": False}) == {"index": 0, "is_solo": False}
+    assert muted == {0: 0, 1: 0, 2: 0}
