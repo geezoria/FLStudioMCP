@@ -111,6 +111,42 @@ def test_automation_is_async_non_blocking():
     bridge._process_automation()
 
 
+def test_automation_applies_time_zero_point_immediately(monkeypatch):
+    applied = []
+    monkeypatch.setattr(bridge, "_rec_tempo", lambda bpm: applied.append(bpm))
+    bridge._auto_jobs.clear()
+    r = bridge._execute(
+        "automation.recordTempo",
+        {"points": [{"time_bars": 0, "bpm": 100}, {"time_bars": 8, "bpm": 140}]},
+    )
+    assert r["mode"] == "async"
+    assert applied == [100]
+    bridge._auto_jobs.clear()
+
+
+def test_transport_refocuses_song_when_plugin_has_focus(monkeypatch):
+    focus = {"plugin": True}
+    calls = []
+    plugin_wids = {getattr(bridge.midi, n) for n in ("widPlugin", "widPluginEffect", "widPluginGenerator")
+                   if hasattr(bridge.midi, n)}
+    monkeypatch.setattr(bridge.ui, "getFocused", lambda wid: int(focus["plugin"] and wid in plugin_wids))
+    monkeypatch.setattr(bridge.ui, "getFocusedPluginName", lambda: "Edison")
+
+    def set_focused(wid):
+        calls.append(("focus", wid))
+        focus["plugin"] = False
+
+    monkeypatch.setattr(bridge.ui, "setFocused", set_focused)
+    monkeypatch.setattr(bridge.transport, "stop", lambda: calls.append("stop"))
+    r = bridge._execute("transport.stop", {})
+    assert r == {"stopped": True, "refocused_from": "Edison"}
+    assert calls == [("focus", bridge.midi.widPlaylist), "stop"]
+    # Nothing focused: no refocus, no extra key.
+    calls.clear()
+    assert bridge._execute("transport.stop", {}) == {"stopped": True}
+    assert calls == ["stop"]
+
+
 # ---- FL 2026 (API 39+) features: gated on hasattr, faked here ---------------
 
 def _fake_patterns(monkeypatch, used, current=1, top=999):

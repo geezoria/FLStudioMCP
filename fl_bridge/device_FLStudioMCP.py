@@ -373,19 +373,46 @@ def _position_unit(unit):
     return {"ms": 0, "seconds": 1, "ticks": 2, "bars": 3, "steps": 4}.get(unit, 3)
 
 
+def _song_transport():
+    """Make transport.* act on the song, not on a focused plugin.
+
+    FL routes start/stop/record to a focused plugin window that has its own
+    transport (Edison, Slicex...). Verified on FL 26.1.7: with Edison focused,
+    transport.stop() left the song playing. Moving focus to the Playlist first
+    fixes it. Returns the plugin name that lost focus, or None."""
+    if not (hasattr(ui, "getFocused") and hasattr(ui, "setFocused")):
+        return None
+    wids = [getattr(midi, n) for n in ("widPlugin", "widPluginEffect", "widPluginGenerator")
+            if hasattr(midi, n)]
+    if not any(_safe(ui.getFocused, w) for w in wids):
+        return None
+    name = _safe(ui.getFocusedPluginName) if hasattr(ui, "getFocusedPluginName") else None
+    _safe(ui.setFocused, getattr(midi, "widPlaylist", 2))
+    return name or "plugin"
+
+
+def _with_refocus(result, refocused):
+    if refocused:
+        result["refocused_from"] = refocused
+    return result
+
+
 def h_transport_start(_):
+    refocused = _song_transport()
     transport.start()
-    return {"is_playing": transport.isPlaying() == 1}
+    return _with_refocus({"is_playing": transport.isPlaying() == 1}, refocused)
 
 
 def h_transport_stop(_):
+    refocused = _song_transport()
     transport.stop()
-    return {"stopped": True}
+    return _with_refocus({"stopped": True}, refocused)
 
 
 def h_transport_record(_):
+    refocused = _song_transport()
     transport.record()
-    return {"is_recording": transport.isRecording() == 1}
+    return _with_refocus({"is_recording": transport.isRecording() == 1}, refocused)
 
 
 def h_transport_status(_):
@@ -1413,10 +1440,12 @@ def _enqueue_automation(points, apply_value, value_key="value", label=""):
         sched.sort(key=lambda x: x[0])
 
         if not _auto_recording:
+            _song_transport()
             transport.record()   # arm
             transport.start()    # roll
             _auto_recording = True
         _auto_jobs.append({"sched": sched, "idx": 0, "apply": apply_value, "label": label})
+        _process_automation()    # points at time 0 apply now, not on the next wake
         total_bars = max((float(pt.get("time_bars", 0.0)) for pt in points), default=0.0)
         return {
             "ok": True,
@@ -1425,7 +1454,10 @@ def _enqueue_automation(points, apply_value, value_key="value", label=""):
             "approx_duration_sec": round(total_bars * spb, 2),
             "mode": "async",
             "note": "Recording live without blocking FL's UI; the clip finishes "
-                    "automatically after the last point.",
+                    "automatically after the last point. FL records what its "
+                    "recording filter allows (right-click Record): 'Automation' "
+                    "must be on, and with 'Audio into Edison' on FL also opens "
+                    "Edison and records audio.",
         }
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
@@ -1451,6 +1483,7 @@ def _process_automation():
     _auto_jobs[:] = [j for j in _auto_jobs if j["idx"] < len(j["sched"])]
     if not _auto_jobs and _auto_recording:
         try:
+            _song_transport()
             transport.stop()
             transport.record()  # disarm
         except Exception:

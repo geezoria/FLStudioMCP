@@ -165,3 +165,11 @@ Older FL versions that call `OnIdle` answer without it, at FL's idle rate.
 Some FL functions open a modal dialog (e.g. `pattern_clear` asks for
 confirmation). While it is open FL's UI thread, and with it the bridge, waits.
 Calls time out until the user answers it in FL.
+
+### Automation recording follows FL's recording filter
+The `automation_record_*` tools arm Record and play the song, then send the
+values live. FL records what its recording filter allows (right-click the
+Record button). *Automation* must be on. If *Audio, into Edison* is also on, FL
+opens Edison on the selected mixer track and records audio as well. The
+Python API can't read or change the filter. In Song mode with an empty
+playlist, FL loops the first bar ("Song jump") until the recording ends.

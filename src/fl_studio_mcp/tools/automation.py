@@ -14,7 +14,11 @@ def register(tools: ToolRegistrar) -> None:
         """Record an automation ramp on the master tempo.
 
         `points`: list of {time_bars: float, bpm: float}. MCP will sequence them live
-        with the correct REC flags to create a real automation clip."""
+        with the correct REC flags to create a real automation clip.
+
+        All automation_record_* tools arm FL's Record and play the song. FL records
+        whatever its recording filter allows: 'Automation' must be enabled there,
+        and if 'Audio into Edison' is enabled FL also opens Edison and records audio."""
         return get_client().call("automation.recordTempo", points=points)
 
     @tools.write("Record Channel Volume Automation")
