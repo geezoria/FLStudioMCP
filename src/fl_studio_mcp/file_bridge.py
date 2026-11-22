@@ -6,31 +6,22 @@ file that the `ComposeWithLLM.pyscript` (piano roll pyscript) picks up when
 it runs. The server triggers the pyscript by synthesising Ctrl+Alt+Y into the
 FL Studio window. The pyscript then writes a state file we read back.
 
-This complements `bridge_client.py` (TCP over MIDI controller script).
+This complements `bridge_client.py` (commands to the MIDI controller script).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from .paths import piano_roll_dir
+
 log = logging.getLogger("fl_studio_mcp.file_bridge")
 
-
-def _piano_roll_dir() -> Path:
-    if sys.platform == "win32":
-        base = Path(os.path.expandvars("%USERPROFILE%")) / "Documents" / "Image-Line" / "FL Studio" / "Settings"
-    else:
-        base = Path.home() / "Documents" / "Image-Line" / "FL Studio" / "Settings"
-    return base / "Piano roll scripts"
-
-
-PR_DIR = _piano_roll_dir()
+PR_DIR = piano_roll_dir()
 REQUEST_FILE = PR_DIR / "fLMCP_request.json"
 STATE_FILE = PR_DIR / "fLMCP_state.json"
 RESPONSE_FILE = PR_DIR / "fLMCP_response.json"
@@ -86,11 +77,11 @@ def wait_for_state(deadline_sec: float = 3.0) -> dict | None:
 
 
 def open_piano_roll(channel: int | None = None, pattern: int | None = None) -> dict:
-    """Best-effort: ask the TCP (MIDI) bridge to open the given channel's piano
+    """Best-effort: ask the controller bridge to open the given channel's piano
     roll, optionally switching pattern first, so subsequently-staged edits land
     on the intended channel.
 
-    If the TCP bridge is offline (no `fLMCP Bridge` MIDI device enabled), this
+    If the controller bridge is offline, this
     is a no-op and edits target whatever piano roll is currently open in FL.
     Requires a channel — FL needs a channel to know which piano roll to show.
     """
@@ -110,7 +101,7 @@ def stage_and_run(actions: list[dict], wait_sec: float = 3.0,
                   channel: int | None = None, pattern: int | None = None) -> dict:
     """Queue one or more piano-roll actions, fire the hotkey, wait for state.
 
-    If `channel` is given and the TCP bridge is online, the correct channel's
+    If `channel` is given and the controller bridge is online, the correct channel's
     piano roll is opened first (best-effort) so the edits route to it.
     """
     from .keystroke import send_hotkey_windows
