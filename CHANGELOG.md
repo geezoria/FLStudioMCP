@@ -23,6 +23,10 @@ command.
 
 ### Added
 
+- **Claude Desktop bundle (`mcpb/`).** `npx @anthropic-ai/mcpb pack mcpb`
+  builds `flmcp-<version>.mcpb`, a one-click install for Claude Desktop that
+  runs the PyPI package with uv and exposes the tool groups and the timeout as
+  extension settings. CI validates and packs it on every push.
 - **File + MIDI-wake transport (protocol 2).** Atomic command and response
   files, a once-a-second heartbeat with bridge/FL/API versions, a
   cross-process lock, `time_ns` ids that survive clock rollback, stale-command

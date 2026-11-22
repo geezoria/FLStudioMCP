@@ -1,0 +1,6 @@
+[project]
+name = "flmcp-mcpb"
+version = "0.4.0"
+description = "Claude Desktop bundle for fLMCP (runs the flmcp package from PyPI)."
+requires-python = ">=3.10"
+dependencies = ["flmcp==0.4.0"]

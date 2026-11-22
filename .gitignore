@@ -74,3 +74,6 @@ mcp_heartbeat.json
 mcp_command.lock
 mcp_command.*.tmp
 fLMCP_log.txt
+
+# --- Claude Desktop bundles (built by `npx @anthropic-ai/mcpb pack mcpb`) --
+*.mcpb

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "flmcp",
+  "display_name": "fLMCP — FL Studio",
+  "version": "0.4.0",
+  "description": "Control FL Studio 2024–2026: transport, mixer, channels, plugins, piano roll and music generators.",
+  "long_description": "fLMCP lets Claude drive a running FL Studio: set the tempo, program step sequences, write chords and melodies into the piano roll, mix, rename and color tracks, tweak plugin parameters and more (165 tools).\n\n**One-time FL setup.** FL Studio talks to fLMCP through a small MIDI controller script. Close FL Studio, run `uvx flmcp install --no-clients` (on Windows, install loopMIDI first so the installer can create the `fLMCP` port), start FL Studio again and check with `uvx flmcp doctor`. The README covers macOS.\n\nThis bundle runs the `flmcp` package from PyPI with uv.",
+  "author": {
+    "name": "geezoria",
+    "url": "https://github.com/geezoria"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/geezoria/FLStudioMCP"
+  },
+  "homepage": "https://github.com/geezoria/FLStudioMCP",
+  "documentation": "https://github.com/geezoria/FLStudioMCP#readme",
+  "support": "https://github.com/geezoria/FLStudioMCP/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "src/server.py"
+      ],
+      "env": {
+        "FLMCP_TOOLSETS": "${user_config.toolsets}",
+        "FLMCP_TIMEOUT": "${user_config.timeout}"
+      }
+    }
+  },
+  "tools_generated": true,
+  "prompts_generated": true,
+  "keywords": [
+    "fl studio",
+    "music",
+    "daw",
+    "midi",
+    "piano roll",
+    "audio"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "win32",
+      "darwin"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  },
+  "user_config": {
+    "toolsets": {
+      "type": "string",
+      "title": "Tool groups",
+      "description": "Comma-separated groups or presets to expose: all, core, lean, transport, mixer, channels, piano_roll, ... Use 'lean' for small context windows.",
+      "default": "all",
+      "required": false
+    },
+    "timeout": {
+      "type": "number",
+      "title": "Timeout (seconds)",
+      "description": "How long to wait for FL Studio to answer each call.",
+      "default": 10,
+      "min": 1,
+      "max": 120,
+      "required": false
+    }
+  }
+}
