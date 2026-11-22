@@ -123,18 +123,25 @@ def fl_midi_inputs() -> list[dict[str, Any]]:
     return rows
 
 
-def fl_is_running() -> bool:
+def fl_instance_count() -> int:
+    """Number of running FL Studio processes (0 when it can't be determined)."""
     if sys.platform == "win32":
         try:
-            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe", "/NH"],
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe", "/FO", "CSV", "/NH"],
                                  capture_output=True, text=True, timeout=10).stdout
-            return "FL64.exe" in out
+            return sum(1 for line in out.splitlines() if line.startswith('"FL64.exe"'))
         except Exception:
-            return False
+            return 0
     try:
-        return subprocess.run(["pgrep", "-x", "FL Studio"], capture_output=True).returncode == 0
+        out = subprocess.run(["pgrep", "-x", "FL Studio"], capture_output=True, text=True,
+                             timeout=10).stdout
+        return len(out.split())
     except Exception:
-        return False
+        return 0
+
+
+def fl_is_running() -> bool:
+    return fl_instance_count() > 0
 
 
 def enable_fl_controller(port: str = DEFAULT_MIDI_PORT, folder: str = "fLMCP Bridge") -> list[str]:
@@ -436,7 +443,13 @@ def cmd_doctor(a: argparse.Namespace) -> int:
                 (_ok if "enabled" == state else _warn)(f"{r['fl']}: input '{r['port']}' {state}")
         else:
             _warn("no MIDI input has controller type 'fLMCP Bridge' yet (FL saves this on exit)")
-        (_ok if fl_is_running() else _info)(f"FL Studio {'is' if fl_is_running() else 'is not'} running")
+        running = fl_is_running()
+        (_ok if running else _info)(f"FL Studio {'is' if running else 'is not'} running")
+        instances = fl_instance_count() if running else 0
+        if instances > 1:
+            problems += 1
+            _warn(f"{instances} FL Studio instances are running. They share the bridge folder, "
+                  "so they race for commands and one call can run in both. Close all but one.")
 
     print("\nBridge")
     hb_path = bdir / "mcp_heartbeat.json"

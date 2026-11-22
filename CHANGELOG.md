@@ -97,6 +97,9 @@ command.
   The bridge first moves focus to the Playlist and reports `refocused_from`.
   The automation recorder does the same, and it now applies points at time 0
   immediately instead of on the next wake.
+- `flmcp doctor` reports when more than one FL Studio instance is running.
+  They share the bridge folder, so they race for commands and a single call
+  can run in both.
 
 ## [0.3.0] — 2026-06-17
 
