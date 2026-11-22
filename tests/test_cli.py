@@ -117,6 +117,7 @@ def test_doctor_accepts_wake_only_bridge_with_stale_heartbeat(tmp_path, monkeypa
     assert "ping failed" in out and "600s old" in out
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="doctor checks FL's MIDI settings only on Windows")
 def test_doctor_flags_two_fl_instances(tmp_path, monkeypatch, capsys):
     """Two FL processes share the bridge folder and race for every command."""
     from fl_studio_mcp import __version__, bridge_client
@@ -157,6 +158,7 @@ def test_enable_fl_controller_sets_script_type(monkeypatch):
     assert written[keys[0]] == {"Type": "-3", "ScriptFolder": "fLMCP Bridge", "Enabled": "1"}
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="doctor checks FL's MIDI settings only on Windows")
 def test_doctor_flags_bridge_input_without_script_type(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FLMCP_BRIDGE_DIR", str(tmp_path))
     monkeypatch.setattr(cli, "midi_output_names", lambda: ["fLMCP"])
