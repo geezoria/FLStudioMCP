@@ -47,19 +47,26 @@ This:
    `ComposeWithLLM.pyscript` into `...\Settings\Piano roll scripts\`
    (it reads FL's own *user data folder* setting, so relocated folders work);
 2. creates a [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html)
-   port named `fLMCP` if loopMIDI is installed (recommended — gives the
-   controller script a MIDI input to live on and makes commands near-instant);
-3. registers the `flmcp` server with **Claude Desktop, Claude Code, Cursor and
+   port named `fLMCP` if loopMIDI is installed (recommended, and required on
+   FL 2026: it gives the controller script a MIDI input to live on and wakes it
+   for every command);
+3. on Windows, **with FL closed**, assigns the *fLMCP Bridge* controller to that
+   MIDI input in FL's settings and enables it, so there is nothing to click;
+4. registers the `flmcp` server with **Claude Desktop, Claude Code, Cursor and
    VS Code** where it finds them (existing configs are backed up to
    `*.flmcp.bak`). Limit it with `--client cursor`, or skip with `--no-clients`.
 
-**2. Enable the bridge in FL Studio** (once):
+**2. Start FL Studio.** The bridge loads with FL; `uvx flmcp doctor` should say
+*All good*.
 
-`Options → MIDI Settings → Input` → select the **fLMCP** row (or any MIDI
-input) → *Controller type* = **fLMCP Bridge** → make sure the row is enabled.
+If FL was running during the install (FL rewrites its MIDI settings on exit, so
+the installer leaves them alone then), either close FL and re-run the install,
+or enable the bridge by hand once: `Options → MIDI Settings → Input` → select
+the **fLMCP** row (or any MIDI input) → *Controller type* = **fLMCP Bridge** →
+make sure the row is enabled.
 
 For piano-roll writing, open any piano roll, click the scripts menu and pick
-**ComposeWithLLM** once. FL remembers both choices.
+**ComposeWithLLM** once. FL remembers it.
 
 **3. Restart your AI app and say *"ping FL Studio"*.** If it can't connect:
 
@@ -228,7 +235,9 @@ the bridge heartbeat, a live ping and version mismatches.
 
 | Symptom | Fix |
 | --- | --- |
-| `bridge offline` / no heartbeat | FL isn't running or the controller isn't enabled: *Options → MIDI Settings → Input*, Controller type **fLMCP Bridge**. Check *View → Script output* for `[fLMCP]` lines. |
+| `bridge offline` / no heartbeat | FL isn't running or the controller isn't enabled. Close FL and re-run `uvx flmcp install`, or set it by hand: *Options → MIDI Settings → Input*, Controller type **fLMCP Bridge**. Check *View → Script output* for `[fLMCP]` lines. |
+| Calls time out or run twice | Doctor warns about several FL instances: they share the bridge folder and race for commands. Close all but one. |
+| Calls time out while FL shows a dialog | A modal dialog (save prompt, plugin error, "Confirm") blocks FL's UI thread and the bridge with it. Close the dialog. |
 | Doctor says the script is outdated | `uvx flmcp install`, then restart FL (or *MIDI Settings → Update scripts*). |
 | Commands are slow (~0.5–1 s) | Install loopMIDI and re-run `flmcp install` so the MIDI wake port exists. |
 | Piano-roll edits don't apply | Select **ComposeWithLLM** in the piano-roll scripts menu once; if FL can't be brought to the foreground, press `Ctrl+Alt+Y` yourself. |
