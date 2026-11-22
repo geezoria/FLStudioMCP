@@ -100,6 +100,13 @@ command.
 - `flmcp doctor` reports when more than one FL Studio instance is running.
   They share the bridge folder, so they race for commands and a single call
   can run in both.
+- `flmcp install` now really assigns the controller. It also writes the MIDI
+  input's `Type="-3"`, which marks a script controller. Without it FL ignored
+  `ScriptFolder`, and users had to pick *fLMCP Bridge* in MIDI Settings by
+  hand. `flmcp doctor` warns when an input names the bridge with another Type.
+  Verified end to end on FL 26.1.7: with FL closed, the registry was reset to a
+  fresh state, then install ran and FL started. The bridge answered without
+  any clicks.
 
 ## [0.3.0] — 2026-06-17
 

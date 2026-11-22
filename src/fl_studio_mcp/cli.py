@@ -144,6 +144,12 @@ def fl_is_running() -> bool:
     return fl_instance_count() > 0
 
 
+# `Type` of a MIDI input whose controller is a Python script. Read from what FL
+# 26.1.7 saved after picking the script by hand. With any other Type, FL ignores
+# ScriptFolder and the bridge never loads.
+SCRIPT_CONTROLLER_TYPE = "-3"
+
+
 def enable_fl_controller(port: str = DEFAULT_MIDI_PORT, folder: str = "fLMCP Bridge") -> list[str]:
     """Assign the bridge script to MIDI input `port` in every FL version's settings.
 
@@ -159,6 +165,7 @@ def enable_fl_controller(port: str = DEFAULT_MIDI_PORT, folder: str = "fLMCP Bri
         key_path = root + "\\Devices\\MIDI input\\" + port
         try:
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                winreg.SetValueEx(key, "Type", 0, winreg.REG_SZ, SCRIPT_CONTROLLER_TYPE)
                 winreg.SetValueEx(key, "ScriptFolder", 0, winreg.REG_SZ, folder)
                 winreg.SetValueEx(key, "Enabled", 0, winreg.REG_SZ, "1")
             changed.append(key_path)
@@ -439,6 +446,11 @@ def cmd_doctor(a: argparse.Namespace) -> int:
         rows = [r for r in fl_midi_inputs() if str(r.get("ScriptFolder", "")) == "fLMCP Bridge"]
         if rows:
             for r in rows:
+                if str(r.get("Type", SCRIPT_CONTROLLER_TYPE)) != SCRIPT_CONTROLLER_TYPE:
+                    _warn(f"{r['fl']}: input '{r['port']}' names the bridge but its controller type "
+                          f"is not a script (Type={r.get('Type')}), so FL won't load it. Close FL "
+                          "and run `flmcp install`, or pick 'fLMCP Bridge' as Controller type.")
+                    continue
                 state = "enabled" if str(r.get("Enabled", "")) == "1" else "assigned but DISABLED"
                 (_ok if "enabled" == state else _warn)(f"{r['fl']}: input '{r['port']}' {state}")
         else:
