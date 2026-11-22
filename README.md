@@ -13,6 +13,11 @@ rack and step sequencer, mixer, plugin parameters, piano-roll note writing,
 playlist, arrangements, automation, undo, rendering — plus high-level music
 generators, voice-to-MIDI humming and audio-file analysis.
 
+![An AI client programs a trap beat in the channel rack and writes chords into the piano roll of FL Studio 2026, all through fLMCP tool calls](https://raw.githubusercontent.com/geezoria/FLStudioMCP/main/docs/demo.gif)
+
+<sub>Recorded on FL Studio 2026 with the tool calls shown below the window; nothing
+was clicked by hand.</sub>
+
 - **165 tools, 7 resources, 6 guided prompts**, with MCP tool annotations
   (read-only / destructive) so clients can auto-approve safe calls.
 - **Works in FL Studio 2025 and 2026's sandboxed Python.** No sockets or threads

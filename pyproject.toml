@@ -93,6 +93,7 @@ packages = ["src/fl_studio_mcp"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "fl_bridge", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE", "server.json"]
+exclude = ["docs/demo.gif"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
