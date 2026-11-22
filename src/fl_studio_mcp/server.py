@@ -16,7 +16,7 @@ from anyio import Lock
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
 
-from . import __version__
+from . import __version__, prompts
 from .resources import project as r_project
 from .tools import _toolsets
 
@@ -66,6 +66,7 @@ def build_app() -> MCPServer:
 
     _toolsets.register(mcp)
     r_project.register(mcp)
+    prompts.register(mcp)
 
     log.info("fl-studio-mcp initialised")
     return mcp

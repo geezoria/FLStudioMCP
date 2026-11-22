@@ -106,6 +106,42 @@ def test_mcp_discovery_and_pure_tool():
     run(exercise)
 
 
+def test_mcp_prompts_list_and_render():
+    workflows = {
+        "make_beat": (
+            {"genre": "house", "bpm": "124", "bars": "8"},
+            ("house", "124 BPM", "8 bars", "gen_emit_drum_pattern_step_seq", "channel_get_step_sequence"),
+        ),
+        "write_chord_progression": (
+            {"key": "F# minor", "mood": "dreamy"},
+            ("F# minor", "dreamy", "gen_emit_chord_progression", "piano_roll_read"),
+        ),
+        "hum_to_melody": ({}, ("voice_record_and_transcribe", "voice_notes_to_piano_roll", "piano_roll_read")),
+        "flip_song_to_dnb": (
+            {"path": r"C:\Music\Example track.wav"},
+            (r"C:\Music\Example track.wav", "audio_analyze", "song_to_dnb_flip", "piano_roll_read"),
+        ),
+        "mix_check": ({}, ("read-only", "mixer_get_eq", "agreement before changing")),
+        "project_overview": ({}, ("read-only", "project_metadata", "transport_status")),
+    }
+
+    async def exercise():
+        async with Client(build_app()) as client:
+            prompts = {prompt.name: prompt for prompt in (await client.list_prompts()).prompts}
+            assert prompts.keys() == workflows.keys()
+            for name, (arguments, expected_text) in workflows.items():
+                prompt = prompts[name]
+                assert prompt.title and prompt.description
+                assert {arg.name for arg in (prompt.arguments or []) if arg.required} == arguments.keys()
+                result = await client.get_prompt(name, arguments)
+                (message,) = result.messages
+                assert message.role == "user"
+                assert message.content.text.startswith("Start with fl_ping.")
+                assert all(text in message.content.text for text in expected_text)
+
+    run(exercise)
+
+
 @pytest.mark.parametrize(
     ("selection", "disabled", "count", "present", "absent"),
     [
