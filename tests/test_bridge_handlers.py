@@ -58,6 +58,12 @@ CASES = [
     ("mixer.allTracks", {}),
     ("mixer.getEQ", {"track": 1}),
     ("mixer.setEQBand", {"track": 1, "band": 0, "gain": 0.5, "frequency": 0.3}),
+    ("mixer.fxSlots", {"track": 1}),
+    ("mixer.setSlotsEnabled", {"track": 1, "enabled": False}),
+    ("mixer.peaks", {}),
+    ("mixer.peaks", {"track": 0}),
+    ("transport.recordingOptions", {}),
+    ("transport.setRecordingOptions", {"metronome": True, "toggle_overdub": True}),
     ("playlist.muteTrack", {"track": 0, "muted": True}),
     ("playlist.soloTrack", {"track": 0, "solo": True}),
     ("playlist.trackInfo", {"track": 0}),
@@ -441,3 +447,75 @@ def test_channel_unsolo_unmutes_every_channel(monkeypatch):
     monkeypatch.setattr(bridge.channels, "muteChannel", mute)
     assert bridge._HANDLERS["channels.solo"]({"index": 0, "solo": False}) == {"index": 0, "is_solo": False}
     assert muted == {0: 0, 1: 0, 2: 0}
+
+
+def test_mixer_set_slot_sets_mix_and_switch(monkeypatch):
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: True)
+    monkeypatch.setattr(bridge.mixer, "getTrackPluginId", lambda tr, slot: 1000 * tr + slot * 100)
+    events = []
+    monkeypatch.setattr(bridge.general, "processRECEvent", lambda *a: events.append(a))
+    monkeypatch.delattr(bridge.mixer, "setPluginMixLevel", raising=False)
+    monkeypatch.setattr(bridge.midi, "REC_Plug_Mute", 0x70001F00, raising=False)  # as in FL's midi.py
+    monkeypatch.setattr(bridge.midi, "REC_Plug_MixLevel", 0x70001F01, raising=False)
+    r = bridge._execute("mixer.setSlot", {"track": 2, "slot": 3, "enabled": False, "mix": 1.5})
+    assert r["slot"] == 3
+    mute_event = 2300 + 0x70001F00
+    mix_event = 2300 + 0x70001F01
+    assert [(e[0], e[1]) for e in events] == [(mute_event, 0), (mix_event, bridge.midi.FromMIDI_Max)]
+
+
+def test_mixer_set_slot_rejects_empty_slots(monkeypatch):
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: False)
+    with pytest.raises(ValueError, match="is empty"):
+        bridge._HANDLERS["mixer.setSlot"]({"track": 1, "slot": 0, "mix": 0.5})
+    with pytest.raises(ValueError, match="slot must be 0-9"):
+        bridge._HANDLERS["mixer.setSlot"]({"track": 1, "slot": 10})
+
+
+def test_mixer_load_effect_uses_the_audio_editor_launcher(monkeypatch, tmp_path):
+    fl_dir = tmp_path / "FL Studio 2026"
+    preset = tmp_path / "Plugin database" / "Effects" / "Fruity Limiter.fst"
+    names = {}
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda tr, s, *a: s in names)
+    monkeypatch.setattr(bridge.plugins, "getPluginName", lambda tr, s, *a: names[s])
+    launched = []
+
+    def launch(reuse, filename, index, rel, guid):
+        launched.append((index, rel))
+        names[len(names)] = "Fruity Limiter"
+        return 1
+
+    monkeypatch.setattr(bridge.ui, "launchAudioEditor", launch)
+    r = bridge._execute("mixer.loadEffect", {"track": 1, "preset": str(preset), "fl_dir": str(fl_dir)})
+    assert r["ok"] is True and r["loaded"] == [{"slot": 0, "name": "Fruity Limiter"}]
+    import os
+    assert launched == [(1, os.path.relpath(str(preset), str(fl_dir / "Data" / "System")))]
+    with pytest.raises(ValueError, match="absolute path"):
+        bridge._HANDLERS["mixer.loadEffect"]({"track": 1, "preset": "Fruity Limiter"})
+
+
+def test_mixer_load_effect_reports_a_preset_fl_ignored(monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge.plugins, "isValid", lambda *a: False)
+    monkeypatch.setattr(bridge.ui, "launchAudioEditor", lambda *a: 0)
+    r = bridge._execute("mixer.loadEffect", {"track": 1, "preset": str(tmp_path / "x.fst"),
+                                             "fl_dir": str(tmp_path)})
+    assert r["ok"] is False
+
+
+def test_fl_data_system_dir_from_midi_module_path(monkeypatch):
+    monkeypatch.setattr(bridge.midi, "__file__",
+                        r"C:\Program Files\Image-Line\FL Studio 2026\Shared\Python\Lib\midi.py", raising=False)
+    got = bridge._fl_data_system_dir({}).replace("\\", "/")
+    assert got.endswith("FL Studio 2026/Data/System")
+
+
+def test_set_recording_options_only_toggles_what_differs(monkeypatch):
+    state = {"isMetronomeEnabled": True, "isLoopRecEnabled": False}
+    for name in ("isMetronomeEnabled", "isLoopRecEnabled"):
+        monkeypatch.setattr(bridge.ui, name, lambda n=name: state[n])
+    toggled = []
+    monkeypatch.setattr(bridge.transport, "globalTransport", lambda cmd, value, *a: toggled.append(cmd))
+    r = bridge._execute("transport.setRecordingOptions", {"metronome": True, "loop_record": True})
+    assert r["changed"] == ["loop_record"]
+    assert r["options"]["loop_record"] is True and r["options"]["metronome"] is True
+    assert toggled == [bridge.midi.FPT_LoopRecord]

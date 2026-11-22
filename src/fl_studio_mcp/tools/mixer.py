@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 from ..bridge_client import get_client
@@ -77,8 +78,53 @@ def register(tools: ToolRegistrar) -> None:
 
     @tools.read("List Mixer FX Slots")
     def mixer_fx_slots(track: int) -> dict[str, Any]:
-        """List plugin IDs in the 10 FX slots of a mixer track (-1 = empty)."""
+        """List the 10 FX slots (0-9) of a mixer track: plugin name, plugin ID (-1 = empty) and, for
+        loaded slots, `enabled` (on/off) and `mix` (dry/wet, 0..1). `slots_enabled` is the track's
+        switch that bypasses every slot at once."""
         return get_client().call("mixer.fxSlots", track=track)
+
+    @tools.write("Set Mixer FX Slot", idempotent=True)
+    def mixer_set_slot(
+        track: int, slot: int, enabled: Optional[bool] = None, mix: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Turn a loaded FX slot (0-9) on or off and/or set its Mix (dry/wet) knob, 0.0 = dry..1.0 = wet.
+        Leave an argument out to keep it. Returns the slot's state as FL reports it."""
+        return get_client().call("mixer.setSlot", track=track, slot=slot, enabled=enabled, mix=mix)
+
+    @tools.write("Enable or Bypass All FX Slots", idempotent=True)
+    def mixer_set_slots_enabled(track: int, enabled: bool = True) -> dict[str, Any]:
+        """Switch all 10 FX slots of a mixer track on (enabled=true) or bypass them (false)."""
+        return get_client().call("mixer.setSlotsEnabled", track=track, enabled=enabled)
+
+    @tools.write("Load Effect into Mixer Track")
+    def mixer_load_effect(track: int, plugin: str) -> dict[str, Any]:
+        """Load an effect plugin into the next free FX slot of a mixer track.
+
+        `plugin` is a name from FL's Plugin database (see `plugin_search`, e.g. "Fruity Reeverb 2",
+        "Fruity Limiter", or a scanned VST), or an absolute path to an .fst preset. Returns the slot it
+        landed in; then use `plugin_params` / `plugin_set_param` with location="mixer" to set it up."""
+        from .. import paths
+        from ..plugin_database import resolve
+
+        entry = resolve(plugin, "effect")
+        install = paths.fl_install_dir()
+        result = get_client().call("mixer.loadEffect", track=track, preset=str(entry.path),
+                                   fl_dir=str(install) if install else None)
+        result["plugin"] = entry.name
+        return result
+
+    @tools.read("Read Mixer Peak Meters")
+    def mixer_peaks(track: Optional[int] = None, include_silent: bool = False) -> dict[str, Any]:
+        """Current output peak of mixer tracks while FL plays: `left`/`right` are linear (1.0 = 0 dBFS,
+        above 1.0 clips) and `peak_db` is the louder side in dBFS. With no `track`, lists the tracks
+        that carry signal (all of them with include_silent). Read them while FL plays: after a stop
+        the meters hold their last level for a moment."""
+        result = get_client().call("mixer.peaks", track=track, include_silent=include_silent)
+        for t in result.get("tracks", []):
+            level = max(float(t.get("left") or 0), float(t.get("right") or 0))
+            t["peak_db"] = round(20 * math.log10(level), 1) if level > 0 else None
+            t["clipping"] = level > 1.0
+        return result
 
     @tools.write("Select Mixer Track", idempotent=True)
     def mixer_select(track: int) -> dict[str, Any]:

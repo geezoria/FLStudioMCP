@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from .. import fl_windows
 from ..bridge_client import get_client
@@ -96,6 +96,29 @@ def register(tools: ToolRegistrar) -> None:
     def transport_toggle_countdown_before_recording() -> dict[str, Any]:
         """Toggle 'countdown before recording'."""
         return get_client().call("transport.toggleCountdownBeforeRec")
+
+    @tools.read("Read Recording Options")
+    def transport_recording_options() -> dict[str, Any]:
+        """Read FL's recording switches: metronome, countdown (precount), wait_for_input,
+        loop_record and step_edit (null = not readable on this FL version)."""
+        return get_client().call("transport.recordingOptions")
+
+    @tools.write("Set Recording Options", idempotent=True)
+    def transport_set_recording_options(
+        metronome: Optional[bool] = None,
+        countdown: Optional[bool] = None,
+        wait_for_input: Optional[bool] = None,
+        loop_record: Optional[bool] = None,
+        step_edit: Optional[bool] = None,
+        toggle_overdub: bool = False,
+    ) -> dict[str, Any]:
+        """Turn recording switches on or off; leave one out to keep it. FL can't report the
+        overdub state, so `toggle_overdub=true` flips it. Returns what changed and the new states."""
+        return get_client().call(
+            "transport.setRecordingOptions", metronome=metronome, countdown=countdown,
+            wait_for_input=wait_for_input, loop_record=loop_record, step_edit=step_edit,
+            toggle_overdub=toggle_overdub,
+        )
 
     @tools.write("Nudge Playhead")
     def transport_jog(steps: int) -> dict[str, Any]:

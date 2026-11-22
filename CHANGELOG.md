@@ -5,6 +5,31 @@ All notable changes to fLMCP are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Load effects into the mixer.** `mixer_load_effect` puts any effect from
+  FL's Plugin database (stock or a scanned VST/VST3/CLAP) into a track's next
+  free FX slot, by name. `plugin_search` lists the database. The
+  `ui.launchAudioEditor` trick comes from karl-andres/fl-studio-mcp#10.
+- **FX slot control.** `mixer_set_slot` turns a slot on or off and sets its
+  mix (dry/wet). `mixer_set_slots_enabled` toggles a track's whole FX chain.
+  `mixer_fx_slots` now reports each slot's state and mix.
+- **`mixer_peaks`** reads the meters of one or every mixer track (linear, dBFS
+  and a clipping flag), so a model can check levels while FL plays.
+- **Recording options.** `transport_recording_options` and
+  `transport_set_recording_options` read and set the metronome, count-in,
+  wait for input, loop record and step edit, and toggle overdub. Peaks and
+  overdub/loop record were suggested in #5 by @marcostolosa.
+
+### Fixed
+
+- The FL user data folder follows a Documents folder moved to OneDrive and the
+  path in FL's registry settings. `FLMCP_USER_DATA_DIR` overrides it.
+
+### Changed
+
+- GitHub Actions run on their Node 24 releases.
+
 ## [0.4.0] — 2026-11-22
 
 Works on FL Studio 2025 and 2026 again, on MCP SDK 2.x, and installs with one

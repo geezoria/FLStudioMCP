@@ -519,6 +519,57 @@ def h_transport_toggle_countdown(_):
     return {"ok": True}
 
 
+# Recording options: (FPT command, ui getter). FL toggles them; set them to a
+# requested state only where it can be read back. Overdub has no getter.
+_RECORDING_OPTIONS = {
+    "metronome": ("FPT_Metronome", "isMetronomeEnabled"),
+    "countdown": ("FPT_CountDown", "isPrecountEnabled"),
+    "wait_for_input": ("FPT_WaitForInput", "isStartOnInputEnabled"),
+    "loop_record": ("FPT_LoopRecord", "isLoopRecEnabled"),
+    "step_edit": ("FPT_StepEdit", "getStepEditMode"),
+}
+
+
+def _recording_options():
+    out = {}
+    for key, (_fpt_name, getter) in _RECORDING_OPTIONS.items():
+        fn = getattr(ui, getter, None)
+        value = _safe(fn) if fn else None
+        out[key] = None if value is None else bool(value)
+    return out
+
+
+def h_transport_recording_options(_):
+    return {"options": _recording_options()}
+
+
+def h_transport_set_recording_options(p):
+    current = _recording_options()
+    changed = []
+    for key, (fpt_name, _getter) in _RECORDING_OPTIONS.items():
+        want = p.get(key)
+        if want is None:
+            continue
+        if current.get(key) is None:
+            raise ValueError("%s can't be read on this FL version, so it can't be set" % key)
+        if bool(want) != current[key]:
+            fpt = _fpt(fpt_name)
+            if fpt is None:
+                raise ValueError("midi.%s is not available on this FL version" % fpt_name)
+            transport.globalTransport(fpt, 1)
+            changed.append(key)
+            current[key] = bool(want)
+    if p.get("toggle_overdub"):
+        fpt = _fpt("FPT_Overdub")
+        if fpt is None:
+            raise ValueError("midi.FPT_Overdub is not available on this FL version")
+        transport.globalTransport(fpt, 1)
+        changed.append("overdub")
+    # The ui getters only see a toggle after this callback returns: report the
+    # states that were set rather than reading them again.
+    return {"changed": changed, "options": current}
+
+
 def h_transport_jog(p):
     steps = int(p.get("steps", 0))
     fpt = _fpt("FPT_Jog")
@@ -1074,18 +1125,162 @@ def h_mixer_route(p):
             if hasattr(mixer, "getRouteSendActive") else None}
 
 
+MIXER_SLOT_COUNT = 10
+
+
+def _bool_or_none(value):
+    return None if value is None else bool(value)
+
+
+def _slot_event(tr, slot, name):
+    """REC event of an FX slot control (REC_Plug_Mute = on/off, REC_Plug_MixLevel = dry/wet)."""
+    offset = getattr(midi, name, None)  # FL's midi.py has both; the API stubs lack them
+    if offset is None:
+        raise ValueError("midi.%s is not available on this FL version" % name)
+    return mixer.getTrackPluginId(tr, slot) + offset
+
+
+def _slot_enabled(tr, slot):
+    # The slot's "mute" control is really its on/off switch: 1 = on.
+    value = _safe(lambda: device.getLinkedValue(_slot_event(tr, slot, "REC_Plug_Mute")))
+    return None if value is None else value >= 0.5
+
+
+def _slot_mix(tr, slot):
+    if hasattr(mixer, "getPluginMixLevel"):  # API 37+
+        value = _safe(mixer.getPluginMixLevel, tr, slot)
+        if value is not None:
+            return float(value)
+    value = _safe(lambda: device.getLinkedValue(_slot_event(tr, slot, "REC_Plug_MixLevel")))
+    return None if value is None else float(value)
+
+
+def _slot_names(tr):
+    names = {}
+    for s in range(MIXER_SLOT_COUNT):
+        if _safe(plugins.isValid, tr, s, False):
+            names[s] = _safe(plugins.getPluginName, tr, s, 0, False)
+    return names
+
+
+def _check_slot(tr, slot):
+    slot = int(slot)
+    if not 0 <= slot < MIXER_SLOT_COUNT:
+        raise ValueError("slot must be 0-%d" % (MIXER_SLOT_COUNT - 1))
+    if not plugins.isValid(tr, slot, False):
+        raise ValueError("FX slot %d of mixer track %d is empty" % (slot, tr))
+    return slot
+
+
 def h_mixer_fx_slots(p):
     tr = _mixer_track(p["track"])
     slots = []
-    for s in range(10):
+    for s in range(MIXER_SLOT_COUNT):
         try:
             pid = mixer.getTrackPluginId(tr, s)
             valid = plugins.isValid(tr, s, False)
-            slots.append({"slot": s, "plugin_id": pid, "valid": bool(valid),
-                          "name": plugins.getPluginName(tr, s, 0, False) if valid else None})
+            slot = {"slot": s, "plugin_id": pid, "valid": bool(valid),
+                    "name": plugins.getPluginName(tr, s, 0, False) if valid else None}
+            if valid:
+                slot["enabled"] = _slot_enabled(tr, s)
+                slot["mix"] = _slot_mix(tr, s)
+            slots.append(slot)
         except Exception:
             slots.append({"slot": s, "plugin_id": -1, "valid": False, "name": None})
-    return {"slots": slots}
+    return {"slots": slots, "slots_enabled": _bool_or_none(_safe(mixer.isTrackSlotsEnabled, tr))}
+
+
+def h_mixer_set_slot(p):
+    """Turn one FX slot on or off and/or set its Mix (dry/wet) knob, 0..1."""
+    tr = _mixer_track(p["track"])
+    slot = _check_slot(tr, p["slot"])
+    flags = midi.REC_Control | midi.REC_UpdateValue | midi.REC_UpdateControl
+    enabled = p.get("enabled")
+    if enabled is not None:
+        general.processRECEvent(_slot_event(tr, slot, "REC_Plug_Mute"),
+                                midi.FromMIDI_Max if enabled else 0, flags)
+    mix = p.get("mix")
+    if mix is not None:
+        mix = min(1.0, max(0.0, float(mix)))
+        if hasattr(mixer, "setPluginMixLevel"):  # API 37+
+            mixer.setPluginMixLevel(tr, slot, mix)
+        else:
+            general.processRECEvent(_slot_event(tr, slot, "REC_Plug_MixLevel"),
+                                    int(round(mix * midi.FromMIDI_Max)), flags)
+    # FL applies a new mix level after this callback returns, so a read here
+    # would show the old one: report the value that was set.
+    return {"track": tr, "slot": slot, "name": plugins.getPluginName(tr, slot, 0, False),
+            "enabled": _slot_enabled(tr, slot), "mix": _slot_mix(tr, slot) if mix is None else mix}
+
+
+def h_mixer_set_slots_enabled(p):
+    """The track's "enable effects slots" switch, which bypasses all 10 slots at once."""
+    tr = _mixer_track(p["track"])
+    mixer.enableTrackSlots(tr, bool(p.get("enabled", True)))
+    return {"track": tr, "slots_enabled": _bool_or_none(_safe(mixer.isTrackSlotsEnabled, tr))}
+
+
+def _fl_data_system_dir(p):
+    """FL's Data/System folder: launchAudioEditor takes presets relative to it."""
+    root = p.get("fl_dir")
+    if not root:
+        # midi.py lives in <FL Studio>/Shared/Python/Lib. Split the path as a
+        # string: the sandbox has no os.stat, so no isdir() probing.
+        midi_file = getattr(midi, "__file__", None)
+        parts = os.path.abspath(midi_file).replace("\\", "/").split("/") if midi_file else []
+        if "Shared" not in parts:
+            return None
+        root = "/".join(parts[:len(parts) - 1 - parts[::-1].index("Shared")])
+    return os.path.join(root, "Data", "System")
+
+
+def h_mixer_load_effect(p):
+    """Load a plugin preset (.fst, e.g. from FL's Plugin database) into the next free FX slot.
+
+    The scripting API has no "load plugin" call, but the audio editor launcher
+    (which the Mackie script uses to put Edison on a track) loads any .fst preset
+    into the track's next free slot, given a path relative to FL's Data/System.
+    """
+    tr = _mixer_track(p["track"])
+    preset = str(p.get("preset") or "")
+    if not preset.lower().endswith(".fst") or not os.path.isabs(preset):
+        raise ValueError("preset must be an absolute path to an .fst file")
+    before = _slot_names(tr)
+    if len(before) >= MIXER_SLOT_COUNT:
+        raise ValueError("all %d FX slots of mixer track %d are full" % (MIXER_SLOT_COUNT, tr))
+    data_system = _fl_data_system_dir(p)
+    if not data_system:
+        return {"ok": False, "error": "FL Studio's install folder is unknown",
+                "hint": "pass fl_dir, the folder that contains FL's Data and Shared folders"}
+    try:
+        relative = os.path.relpath(preset, data_system)
+    except ValueError:
+        raise ValueError("the preset must be on the same drive as FL Studio") from None
+    ui.launchAudioEditor(False, "", tr, relative, "")
+    after = _slot_names(tr)
+    loaded = [{"slot": s, "name": name} for s, name in sorted(after.items()) if before.get(s) != name]
+    if not loaded:
+        return {"ok": False, "track": tr, "error": "FL Studio did not load %s" % preset,
+                "hint": "check that the .fst file exists and loads when dragged onto the mixer track"}
+    return {"ok": True, "track": tr, "track_name": mixer.getTrackName(tr), "loaded": loaded}
+
+
+def h_mixer_peaks(p):
+    """Current output peaks (linear, 1.0 = 0 dBFS) of one or all mixer tracks."""
+    left_mode = getattr(midi, "PEAK_L", 0)
+    right_mode = getattr(midi, "PEAK_R", 1)
+    if p.get("track") is not None:
+        tracks = [_mixer_track(p["track"])]
+    else:
+        tracks = range(int(_safe(mixer.trackCount) or 127) - 1)
+    out = []
+    for tr in tracks:
+        left = float(mixer.getTrackPeaks(tr, left_mode))
+        right = float(mixer.getTrackPeaks(tr, right_mode))
+        if p.get("track") is None and not p.get("include_silent") and max(left, right) <= 0:
+            continue
+        out.append({"track": tr, "name": mixer.getTrackName(tr), "left": left, "right": right})
+    return {"tracks": out, "playing": bool(_safe(transport.isPlaying))}
 
 
 def h_mixer_select(p):
@@ -2054,6 +2249,8 @@ _HANDLERS = {
     "transport.setTimeSignature": h_transport_set_time_signature,
     "transport.toggleMetronome": h_transport_toggle_metronome,
     "transport.toggleCountdownBeforeRec": h_transport_toggle_countdown,
+    "transport.recordingOptions": h_transport_recording_options,
+    "transport.setRecordingOptions": h_transport_set_recording_options,
     "transport.jog": h_transport_jog,
     # patterns
     "patterns.count": h_patterns_count,
@@ -2108,6 +2305,10 @@ _HANDLERS = {
     "mixer.setSendLevel": h_mixer_set_send_level,
     "mixer.route": h_mixer_route,
     "mixer.fxSlots": h_mixer_fx_slots,
+    "mixer.setSlot": h_mixer_set_slot,
+    "mixer.setSlotsEnabled": h_mixer_set_slots_enabled,
+    "mixer.loadEffect": h_mixer_load_effect,
+    "mixer.peaks": h_mixer_peaks,
     "mixer.select": h_mixer_select,
     "mixer.getEQ": h_mixer_get_eq,
     "mixer.setEQBand": h_mixer_set_eq_band,

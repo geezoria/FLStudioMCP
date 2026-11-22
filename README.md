@@ -9,7 +9,8 @@
 
 **Let Claude, Cursor, VS Code Copilot, Codex — any [MCP](https://modelcontextprotocol.io)
 client — drive FL Studio 2024 / 2025 / 2026.** Transport, patterns, the channel
-rack and step sequencer, mixer, plugin parameters, piano-roll note writing,
+rack and step sequencer, mixer (including loading effects by name), plugin
+parameters, piano-roll note writing,
 playlist, arrangements, automation, undo, rendering — plus high-level music
 generators, voice-to-MIDI humming and audio-file analysis.
 
@@ -18,7 +19,7 @@ generators, voice-to-MIDI humming and audio-file analysis.
 <sub>Recorded on FL Studio 2026 with the tool calls shown below the window; nothing
 was clicked by hand.</sub>
 
-- **165 tools, 7 resources, 6 guided prompts**, with MCP tool annotations
+- **172 tools, 7 resources, 6 guided prompts**, with MCP tool annotations
   (read-only / destructive) so clients can auto-approve safe calls.
 - **Works in FL Studio 2025 and 2026's sandboxed Python.** No sockets or threads
   inside FL — a file transport with an optional MIDI wake-up (see
@@ -125,6 +126,9 @@ Without uv: `pip install flmcp-studio`, then use `"command": "python", "args": [
 > *"Give me an overview of the project and tell me which mixer tracks are
 > clipping-prone or unrouted."*
 
+> *"Put Fruity Limiter and a reverb on the vocal track, set the reverb to 30 %
+> wet and tell me if the master clips while the drop plays."*
+
 > *"I'll hum a riff for 8 seconds — snap it to C minor, quantize to 1/16 at
 > 120 BPM and write it into the open piano roll."*
 
@@ -140,11 +144,11 @@ appear in clients that support MCP prompts (e.g. the `/` menu in Claude).
 | Group | Tools | Highlights |
 | --- | :-: | --- |
 | `meta` | 6 | ping/health, reconnect, bridge info, API introspection, raw action, toolsets |
-| `transport` | 14 | play / stop / record, position, tempo, time signature, metronome, jog |
+| `transport` | 16 | play / stop / record, position, tempo, time signature, metronome, count-in, loop record, overdub |
 | `patterns` | 14 | create, rename, clone, clear, color, set length (FL 2026), find by name |
 | `channels` | 22 | channel rack, step sequencer get/set, rack swing, routing, note trigger |
-| `mixer` | 18 | volume / pan / mute / solo / arm, sends, EQ, FX slots |
-| `plugins` | 13 | parameters get / set / search, presets, editor windows |
+| `mixer` | 22 | volume / pan / mute / solo / arm, sends, EQ, **load effects by name**, FX slot on/off and mix, peak meters |
+| `plugins` | 14 | search installed plugins, parameters get / set / search, presets, editor windows |
 | `piano_roll` | 11 | add / read / clear notes, chords, quantize, transpose, humanize |
 | `playlist` | 14 | tracks, markers, clip capability report |
 | `arrangement` | 5 | list / select arrangements, jump to markers |
@@ -171,8 +175,10 @@ groups at startup with environment variables:
 
 | Variable | Example | Effect |
 | --- | --- | --- |
-| `FLMCP_TOOLSETS` | `lean` · `core` · `transport,mixer,piano_roll` | Presets: `all` (default, 165), `lean` (41 composing essentials), `core` (25). Groups can be combined with presets. |
+| `FLMCP_TOOLSETS` | `lean` · `core` · `transport,mixer,piano_roll` | Presets: `all` (default, 172), `lean` (41 composing essentials), `core` (27). Groups can be combined with presets. |
 | `FLMCP_DISABLE_TOOLS` | `fl_call_raw,project_render` | Remove individual tools. |
+| `FLMCP_USER_DATA_DIR` | `D:\Image-Line` | FL's user data folder, when it isn't found automatically (registry, OneDrive Documents). |
+| `FLMCP_BRIDGE_DIR` | | The bridge folder, when it isn't under the user data folder. |
 
 `fl_ping` and `fl_list_toolsets` are always available; `fl_list_toolsets` shows
 what is enabled.
