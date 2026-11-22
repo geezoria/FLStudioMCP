@@ -1,5 +1,8 @@
 import json
+import sys
 import time
+
+import pytest
 
 from fl_studio_mcp import cli
 
@@ -132,3 +135,35 @@ def test_doctor_flags_two_fl_instances(tmp_path, monkeypatch, capsys):
                         lambda **kw: _FakeBridge({"bridge_version": __version__}))
     assert cli.main(["doctor"]) == 1
     assert "2 FL Studio instances are running" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="FL registry settings are Windows-only")
+def test_enable_fl_controller_sets_script_type(monkeypatch):
+    """FL only loads ScriptFolder when Type marks the input as a script controller."""
+    import contextlib
+    import winreg
+
+    written: dict[str, dict[str, str]] = {}
+
+    @contextlib.contextmanager
+    def create_key(_hive, path):
+        yield written.setdefault(path, {})
+
+    monkeypatch.setattr(cli, "_fl_registry_roots", lambda: [r"Software\Image-Line\FL Studio 26"])
+    monkeypatch.setattr(winreg, "CreateKey", create_key)
+    monkeypatch.setattr(winreg, "SetValueEx", lambda key, name, _r, _t, value: key.__setitem__(name, value))
+    keys = cli.enable_fl_controller("fLMCP")
+    assert keys == [r"Software\Image-Line\FL Studio 26\Devices\MIDI input\fLMCP"]
+    assert written[keys[0]] == {"Type": "-3", "ScriptFolder": "fLMCP Bridge", "Enabled": "1"}
+
+
+def test_doctor_flags_bridge_input_without_script_type(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FLMCP_BRIDGE_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "midi_output_names", lambda: ["fLMCP"])
+    monkeypatch.setattr(cli, "fl_midi_inputs", lambda: [
+        {"fl": "FL Studio 26", "port": "fLMCP", "Type": "0",
+         "ScriptFolder": "fLMCP Bridge", "Enabled": "1"}])
+    monkeypatch.setattr(cli, "fl_is_running", lambda: False)
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "controller type is not a script (Type=0)" in out
