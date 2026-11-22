@@ -17,8 +17,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: uvx ruff check .
 
   test:
@@ -30,8 +30,8 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
         python: ["3.10", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -48,15 +48,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: uv build
       - name: Smoke-test the wheel
         run: |
           uv venv /tmp/wheeltest
           uv pip install --python /tmp/wheeltest dist/*.whl
           /tmp/wheeltest/bin/python -c "import fl_studio_mcp, fl_studio_mcp.server as s; s.build_app(); print(fl_studio_mcp.__version__)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -65,13 +65,13 @@ jobs:
     name: Claude Desktop bundle
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: npx -y @anthropic-ai/mcpb validate mcpb/manifest.json
-      - run: npx -y @anthropic-ai/mcpb pack mcpb flmcp.mcpb
-      - uses: actions/upload-artifact@v4
+      - run: npx -y @anthropic-ai/mcpb@2.1.2 validate mcpb/manifest.json
+      - run: npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb flmcp.mcpb
+      - uses: actions/upload-artifact@v7
         with:
           name: mcpb
           path: flmcp.mcpb
