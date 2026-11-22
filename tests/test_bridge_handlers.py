@@ -406,3 +406,20 @@ def test_list_markers_stops_at_first_empty_name(monkeypatch):
     r = bridge._execute("playlist.listMarkers", {})
     assert r["ok"] is True
     assert r["markers"] == [{"index": i, "name": n} for i, n in enumerate(names)]
+
+
+def test_mixer_handlers_reject_tracks_beyond_this_projects_inserts(monkeypatch):
+    # An FL 2026 project with 16 inserts: trackCount() = Master + 16 + "Current".
+    monkeypatch.setattr(bridge.mixer, "trackCount", lambda: 18)
+    calls = []
+    monkeypatch.setattr(bridge.channels, "setTargetFxTrack", lambda *a: calls.append(a))
+    for action, params in [
+        ("mixer.setVolume", {"track": 17, "volume": 0.5}),
+        ("mixer.route", {"src_track": 1, "dst_track": 17}),
+        ("channels.routeToMixer", {"index": 0, "mixer_track": 101}),
+    ]:
+        with pytest.raises(ValueError, match="1-16 are the inserts"):
+            bridge._HANDLERS[action](params)
+    assert calls == []  # FL would have clamped 101 to 16 silently
+    bridge._HANDLERS["channels.routeToMixer"]({"index": 0, "mixer_track": 16})
+    assert calls == [(0, 16)]

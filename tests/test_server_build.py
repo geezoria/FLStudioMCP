@@ -275,3 +275,26 @@ def test_ping_flags_outdated_bridge_and_introspect_filters(monkeypatch):
             }
 
     run(exercise)
+
+
+def test_tool_errors_reach_the_model(monkeypatch):
+    from fl_studio_mcp.protocol import RPCError
+    from fl_studio_mcp.tools import mixer as mixer_tools
+
+    class FailingBridge:
+        def call(self, action, **params):
+            raise RPCError(action, "ValueError: mixer track 101 out of range (0 = Master, 1-16 ...)")
+
+    monkeypatch.setattr(mixer_tools, "get_client", FailingBridge)
+
+    async def exercise():
+        async with Client(build_app()) as client:
+            result = await client.call_tool("mixer_route", {"src_track": 100, "dst_track": 101})
+            assert result.is_error
+            assert "mixer.route: ValueError: mixer track 101 out of range" in result.content[0].text
+            # Argument checks inside a tool body reach the model too.
+            result = await client.call_tool("pattern_set_length", {"index": 1})
+            assert result.is_error
+            assert "ValueError: give exactly one of bars, beats or steps" in result.content[0].text
+
+    run(exercise)

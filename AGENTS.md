@@ -29,11 +29,13 @@ pytest                                   # offline, ~10 s, no FL needed
 python -m py_compile fl_bridge/device_FLStudioMCP.py
 python scripts/gen_tools_doc.py          # regenerate docs/TOOLS.md after any tool change (CI checks it)
 python -m fl_studio_mcp doctor           # diagnose a live install
+python scripts/live_check.py --write     # every tool against a running FL (scratch project; edits are restored)
 python -m fl_studio_mcp install --command python --no-clients   # push the working-tree bridge into FL
 ```
 
 On Windows use `.venv/Scripts/python.exe`. Run all of ruff, pytest and the TOOLS.md check
-before calling work done.
+before calling work done. After a bridge or tool change, push the bridge into FL
+and run `live_check.py --write` too: the stubs can't tell you what FL really does.
 
 ## Adding or changing a tool
 
@@ -42,7 +44,10 @@ before calling work done.
    and return plain JSON types. Gate APIs newer than FL 2024 with
    `hasattr(module, "fn")` or `general.getVersion()`, and return a structured
    `{"ok": False, "error": ..., "hint": ...}` when they are missing. Don't raise
-   for that.
+   for that. Do raise `ValueError` with a clear message for bad arguments:
+   `tools/_meta.py` turns every exception into a `ToolError`, the only kind
+   whose text MCP 2 shows the model. Validate mixer tracks with `_mixer_track()`
+   and patterns with `_check_pattern_index()`.
 2. **MCP tool.** Add it in `src/fl_studio_mcp/tools/<group>.py` with
    `@tools.read("Title")` or `@tools.write("Title", destructive=...)` from
    `tools/_meta.py`. Every tool needs a Title-Case title and correct
@@ -97,6 +102,17 @@ before calling work done.
   `HKCU\Software\Image-Line\FL Studio <N>\Devices\MIDI input\<port>` needs
   `Type="-3"` (script), `ScriptFolder="fLMCP Bridge"`, `Enabled="1"`. With any other
   `Type`, FL ignores `ScriptFolder`.
+- **Mixer size varies.** FL 2026 projects can have fewer than 125 inserts
+  (the default template has 16). `mixer.trackCount()` counts Master, the
+  inserts and a hidden "Current" track. Out-of-range indices raise "Index out
+  of range" or, for `channels.setTargetFxTrack`, clamp silently.
+- **Piano-roll scripts run from the Tools menu.** There is no API to run one.
+  The server posts a click on the piano roll's caption icon, then Up × *n* and
+  Enter to FL's `TQuickPopupMenuWindow` (`fl_windows.run_piano_roll_script`).
+  The menu ignores posted mouse coordinates but takes posted keys, and lists
+  the user's and FL's built-in scripts sorted together, so *n* is counted from
+  the end of that list. FL 26.1.7's `patterns.clearPattern` doesn't ask for
+  confirmation.
 - **One FL at a time.** Two FL processes share the bridge folder, race for
   commands and can both execute one call. `doctor` warns about it.
 - `meta.introspect` (via `fl_call_raw`) dumps every callable and docstring the
