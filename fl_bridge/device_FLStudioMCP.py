@@ -1,44 +1,18 @@
 # name=fLMCP Bridge
 # supportedDevices=fLMCP Bridge
-# url=https://github.com/your-handle/fLMCP
+# url=https://github.com/geezoria/FLStudioMCP
 # receiveFrom=fLMCP Bridge
 
-"""
-fLMCP Bridge — the FL Studio side of the fl-studio-mcp Model Context Protocol server.
+"""FL Studio controller for the fLMCP protocol 2 file transport.
 
-How it works
-------------
-This script runs inside FL Studio as a "MIDI device" (no real hardware needed — it's
-loaded by configuring a virtual/loopback MIDI port or by any MIDI input that FL can
-see). On OnInit() it starts a TCP server on 127.0.0.1:9876 in a daemon thread that
-receives length-prefixed JSON-RPC requests from the fl-studio-mcp server.
-
-Requests are placed in a thread-safe queue. FL Studio's main thread calls OnIdle()
-several times per second; each OnIdle call drains the queue and executes the pending
-FL API calls on the main thread (FL's Python API is not thread-safe, so we MUST
-execute there), then pushes responses back through the socket.
-
-Piano-roll edits are deferred: we stage them into `piano_roll_requests.json` inside
-this script's directory, and the fl-studio-mcp server is responsible for opening the
-piano-roll window and triggering the companion `ComposeWithLLM.pyscript` via
-Ctrl+Alt+Y. After the pyscript runs, it writes `piano_roll_state.json` which the
-MCP server reads back.
-
-Protocol
---------
-Frame: [4-byte big-endian uint32 length][payload = utf-8 JSON]
-Request:      {"id": int, "action": str, "params": {...}}
-Response:     {"id": int, "ok": bool, "result": ..., "error": str|None}
-Notification: {"event": str, "data": ...}   (server push, no id)
+FL executes commands and advances automation from its controller callbacks.
+OnIdle polls the command file, and a reserved MIDI CC can also wake the bridge.
+The companion ComposeWithLLM.pyscript handles piano-roll file requests separately.
 """
 
 import json
 import os
-import queue
-import socket
-import struct
 import sys
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -69,42 +43,51 @@ except ImportError:  # pragma: no cover - exercised only outside FL Studio
 # Configuration
 # ----------------------------------------------------------------------------
 
-BRIDGE_HOST = "127.0.0.1"
-BRIDGE_PORT = 9876
-HEADER = struct.Struct(">I")
-MAX_FRAME = 16 * 1024 * 1024
-BRIDGE_VERSION = "0.2.0"
+BRIDGE_VERSION = "0.4.0"
+PROTOCOL = 2
+MAX_COMMAND_BYTES = 16 * 1024 * 1024
+MAX_BATCH_ACTIONS = 32
+MAX_LOG_BYTES = 64 * 1024
+WAKE_STATUS = 0xBF
+WAKE_CONTROLLER = 119
 
 
 def _script_dir():
-    if sys.platform == "darwin":
-        base = Path.home() / "Documents" / "Image-Line" / "FL Studio" / "Settings"
-    elif sys.platform == "win32":
-        userprofile = os.environ.get("USERPROFILE", str(Path.home()))
-        base = Path(userprofile) / "Documents" / "Image-Line" / "FL Studio" / "Settings"
-    else:
-        base = Path.home() / "Documents" / "Image-Line" / "FL Studio" / "Settings"
-    return base / "Hardware" / "fLMCP Bridge"
+    script_file = globals().get("__file__")
+    if script_file:
+        try:
+            path = Path(script_file)
+            return path.parent if path.is_absolute() else Path(os.path.abspath(path)).parent
+        except Exception:
+            pass
+    try:
+        home = Path.home()
+    except Exception:
+        home = Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or ".")
+    return home / "Documents" / "Image-Line" / "FL Studio" / "Settings" / "Hardware" / "fLMCP Bridge"
 
 
 SCRIPT_DIR = _script_dir()
-PIANO_ROLL_DIR_NAME = "Piano roll scripts"
-PR_REQUEST = Path(SCRIPT_DIR).parent.parent / PIANO_ROLL_DIR_NAME / "fLMCP_request.json"
-PR_STATE = Path(SCRIPT_DIR).parent.parent / PIANO_ROLL_DIR_NAME / "fLMCP_state.json"
+COMMAND_FILE = SCRIPT_DIR / "mcp_command.json"
+RESPONSE_FILE = SCRIPT_DIR / "mcp_response.json"
+HEARTBEAT_FILE = SCRIPT_DIR / "mcp_heartbeat.json"
+LOG_FILE = SCRIPT_DIR / "fLMCP_log.txt"
+PR_REQUEST = SCRIPT_DIR.parent.parent / "Piano roll scripts" / "fLMCP_request.json"
+PR_STATE = SCRIPT_DIR.parent.parent / "Piano roll scripts" / "fLMCP_state.json"
 
 
 # ----------------------------------------------------------------------------
 # Global state
 # ----------------------------------------------------------------------------
 
-_inbox: "queue.Queue[tuple[socket.socket, dict]]" = queue.Queue()
-_server_thread = None
-_accept_socket = None
-_client_lock = threading.Lock()
 _started_at = time.monotonic()
-_idle_tick = 0
-_last_refresh_push = 0.0
-_known_clients = set()  # live client sockets for push notifications
+_idle_calls = 0
+_midi_wakes = 0
+_last_id = 0
+_last_heartbeat = float("-inf")
+_last_command = None
+_processing = False
+_pending_response = None
 _auto_jobs = []          # pending non-blocking automation jobs (see automation section)
 _auto_recording = False  # True while an automation clip is being recorded live
 
@@ -115,35 +98,17 @@ _auto_recording = False  # True while an automation clip is being recorded live
 
 def _log(msg):
     try:
-        print("[fLMCP] " + msg)
+        line = ("[fLMCP] %s\n" % msg).encode("utf-8", errors="replace")[:MAX_LOG_BYTES]
+        try:
+            with open(LOG_FILE, "rb") as log_file:
+                length = len(log_file.read(MAX_LOG_BYTES))
+        except Exception:
+            length = 0
+        mode = "wb" if length + len(line) > MAX_LOG_BYTES else "ab"
+        with open(LOG_FILE, mode) as log_file:
+            log_file.write(line)
     except Exception:
         pass
-
-
-def _pack_frame(obj):
-    body = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    if len(body) > MAX_FRAME:
-        raise ValueError("frame too large: %d" % len(body))
-    return HEADER.pack(len(body)) + body
-
-
-def _recv_exact(sock, n):
-    buf = bytearray()
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("socket closed")
-        buf.extend(chunk)
-    return bytes(buf)
-
-
-def _read_frame(sock):
-    head = _recv_exact(sock, HEADER.size)
-    (length,) = HEADER.unpack(head)
-    if length > MAX_FRAME:
-        raise ValueError("frame length out of bounds: %d" % length)
-    body = _recv_exact(sock, length)
-    return json.loads(body.decode("utf-8"))
 
 
 def _color_to_int(color):
@@ -197,60 +162,135 @@ def _safe(fn, *a, **kw):
 
 
 # ----------------------------------------------------------------------------
-# Server thread
+# File transport (standalone because FL loads this script directly)
 # ----------------------------------------------------------------------------
 
-def _serve_client(client):
-    _known_clients.add(client)
+def _read_command():
+    global _last_command
     try:
-        while True:
-            try:
-                req = _read_frame(client)
-            except (ConnectionError, OSError):
-                return
-            except Exception as e:
-                try:
-                    err = {"id": 0, "ok": False, "error": "frame_error: %s" % e}
-                    client.sendall(_pack_frame(err))
-                except Exception:
-                    return
-                return
-            # hand off to the FL main thread via queue
-            _inbox.put((client, req))
-    finally:
-        _known_clients.discard(client)
-        try:
-            client.close()
-        except Exception:
-            pass
+        with open(COMMAND_FILE, "rb") as command_file:
+            raw = command_file.read(MAX_COMMAND_BYTES + 1)
+        if raw and raw != _last_command and len(raw) <= MAX_COMMAND_BYTES:
+            request = json.loads(raw.decode("utf-8"))
+            if isinstance(request, dict):
+                _last_command = raw
+                return request
+    except Exception:
+        pass
+    return {}
 
 
-def _server_loop():
-    global _accept_socket
-    try:
-        _accept_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _accept_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        _accept_socket.bind((BRIDGE_HOST, BRIDGE_PORT))
-        _accept_socket.listen(4)
-        _log("TCP server listening on %s:%d" % (BRIDGE_HOST, BRIDGE_PORT))
-    except Exception as e:
-        _log("failed to bind bridge port: %s" % e)
-        _accept_socket = None
+def _write_json(path, data):
+    body = json.dumps(data, ensure_ascii=True, separators=(",", ":"))
+    with open(path, "w", encoding="utf-8") as output:
+        output.write(body)
+
+
+def _bridge_status():
+    fl_version = _safe(lambda: ui.getVersion())
+    return {
+        "bridge_version": BRIDGE_VERSION,
+        "protocol": PROTOCOL,
+        "api_version": _safe(lambda: general.getVersion()),
+        "fl_version": fl_version if isinstance(fl_version, str) and fl_version else "unknown",
+        "idle_calls": _idle_calls,
+        "midi_wakes": _midi_wakes,
+    }
+
+
+def _write_heartbeat(*, force=False, stopped=False):
+    global _last_heartbeat
+    now = time.monotonic()
+    if not force and now - _last_heartbeat < 1.0:
         return
+    _last_heartbeat = now
+    try:
+        _write_json(HEARTBEAT_FILE, {
+            **_bridge_status(),
+            "pid": _safe(lambda: os.getpid()),
+            "last_id": _last_id,
+            "ts": 0 if stopped else time.time(),
+        })
+    except Exception as e:
+        _log("heartbeat write failed: %s" % e)
 
-    while True:
+
+def _action_response(request, *, include_traceback=True):
+    try:
+        if not isinstance(request, dict):
+            raise ValueError("action must be an object")
+        action = request.get("action")
+        params = request.get("params", {})
+        if not isinstance(action, str) or not isinstance(params, dict):
+            raise ValueError("expected a string action and an object params")
+        return {"ok": True, "result": _execute(action, params)}
+    except Exception as e:
+        _log("action failed: %s" % e)
+        response = {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
+        if include_traceback:
+            response["traceback"] = traceback.format_exc(limit=3)
+        return response
+
+
+def _poll_command():
+    global _last_id, _pending_response
+    request = _read_command()
+    request_id = request.get("id")
+    if type(request_id) is not int or request_id <= _last_id:
+        return
+    _last_id = request_id  # Record before dispatch, even if writing the response fails.
+    start = time.monotonic()
+    if request.get("protocol") != PROTOCOL:
+        response = {"ok": False, "error": "expected protocol 2"}
+    elif "batch" in request:
+        batch = request["batch"]
+        if not isinstance(batch, list) or len(batch) > MAX_BATCH_ACTIONS:
+            response = {"ok": False, "error": "expected a batch of at most %d actions" % MAX_BATCH_ACTIONS}
+        else:
+            response = {"ok": True, "results": [
+                _action_response(item, include_traceback=False) for item in batch
+            ]}
+    else:
+        response = _action_response(request)
+    elapsed_ms = round((time.monotonic() - start) * 1000, 3)
+    response["id"] = request_id
+    if "results" not in response:
+        response["elapsed_ms"] = elapsed_ms
+    try:
+        _pending_response = json.dumps(response, ensure_ascii=True, separators=(",", ":"))
+    except Exception as e:
+        _pending_response = json.dumps({
+            "id": request_id, "ok": False, "error": "cannot serialize response: %s" % e,
+            "elapsed_ms": elapsed_ms,
+        })
+
+
+def _run_bridge_tick():
+    global _processing, _pending_response
+    if _processing:
+        return
+    _processing = True
+    try:
+        _poll_command()
+        if _pending_response is not None:
+            try:
+                with open(RESPONSE_FILE, "w", encoding="utf-8") as response_file:
+                    response_file.write(_pending_response)
+                _pending_response = None
+            except Exception as e:
+                _log("response write failed: %s" % e)
+        _process_automation()
+    except Exception as e:
+        _log("bridge tick failed: %s" % e)
+    finally:
         try:
-            conn, addr = _accept_socket.accept()
-            conn.settimeout(60.0)
-            t = threading.Thread(target=_serve_client, args=(conn,), daemon=True)
-            t.start()
-        except Exception as e:
-            _log("accept error: %s" % e)
-            time.sleep(0.5)
+            _write_heartbeat()
+        finally:
+            _processing = False
 
 
 # ----------------------------------------------------------------------------
-# Handlers — executed on FL's main thread (from OnIdle)
+# Handlers — executed on FL's main thread
 # ----------------------------------------------------------------------------
 
 def _execute(action, params):
@@ -263,11 +303,17 @@ def _execute(action, params):
 
 # ---- meta -------------------------------------------------------------------
 
+_API_MODULES = (
+    "arrangement", "channels", "device", "general", "midi", "mixer",
+    "patterns", "playlist", "plugins", "transport", "ui",
+)
+_OPTIONAL_API_MODULES = ("screen", "launchMapPages", "utils", "enveditor")
+
+
 def h_meta_ping(_):
     return {
         "ok": True,
-        "bridge_version": BRIDGE_VERSION,
-        "fl_version": _safe(general.getVersion) or "unknown",
+        **_bridge_status(),
         "uptime_sec": round(time.monotonic() - _started_at, 1),
         "script_dir": str(SCRIPT_DIR),
     }
@@ -275,14 +321,44 @@ def h_meta_ping(_):
 
 def h_meta_info(_):
     return {
-        "bridge_version": BRIDGE_VERSION,
-        "fl_version": _safe(general.getVersion) or "unknown",
-        "api_modules": ["transport","mixer","channels","patterns","playlist",
-                        "plugins","arrangement","ui","general","device","midi"],
+        **_bridge_status(),
+        "api_modules": list(_API_MODULES),
         "script_dir": str(SCRIPT_DIR),
-        "tcp_host": BRIDGE_HOST,
-        "tcp_port": BRIDGE_PORT,
+        "transport": "file",
+        "command_file": str(COMMAND_FILE),
+        "response_file": str(RESPONSE_FILE),
+        "heartbeat_file": str(HEARTBEAT_FILE),
     }
+
+
+def h_meta_introspect(params):
+    requested = params.get("modules")
+    if requested is not None and (
+        not isinstance(requested, list) or any(not isinstance(name, str) for name in requested)
+    ):
+        raise ValueError("modules must be a list of module names")
+    modules = {}
+    for name in _API_MODULES + _OPTIONAL_API_MODULES:
+        if requested is not None and name not in requested:
+            continue
+        module = globals().get(name) if name in _API_MODULES else _safe(__import__, name)
+        if module is None:
+            continue
+        callables = []
+        constants = {}
+        for attribute in dir(module):
+            if attribute.startswith("_"):
+                continue
+            value = _safe(getattr, module, attribute)
+            if callable(value):
+                doc = _safe(getattr, value, "__doc__")
+                callables.append({"name": attribute, "doc": doc[:400] if isinstance(doc, str) else ""})
+            elif name == "midi" and type(value) is int:
+                constants[attribute] = value
+        modules[name] = {"callables": callables}
+        if name == "midi":
+            modules[name]["constants"] = constants
+    return {**_bridge_status(), "python_version": sys.version, "modules": modules}
 
 
 # ---- transport --------------------------------------------------------------
@@ -1188,7 +1264,7 @@ def h_arr_play_time(_):
 # values at the right musical times so FL captures an automation clip. The naive
 # approach (time.sleep between points) would block FL's main thread inside
 # OnIdle and FREEZE the whole UI for the duration. Instead we schedule each
-# point as an absolute monotonic deadline and apply it from OnIdle without ever
+# point as an absolute monotonic deadline and apply it from a callback without
 # sleeping — FL stays fully responsive while the clip records.
 
 def _seconds_per_bar():
@@ -1205,8 +1281,8 @@ def _rec_tempo(bpm):
 
 
 def _enqueue_automation(points, apply_value, value_key="value", label=""):
-    """Schedule `points` ([{time_bars, <value_key>}]) to be applied live from
-    OnIdle. `apply_value(float)` writes one value. Returns immediately."""
+    """Schedule `points` ([{time_bars, <value_key>}]) for callback processing.
+    `apply_value(float)` writes one value. Returns immediately."""
     global _auto_recording
     if not points:
         return {"ok": False, "error": "no points"}
@@ -1241,7 +1317,7 @@ def _enqueue_automation(points, apply_value, value_key="value", label=""):
 
 def _process_automation():
     """Apply any due automation points and stop recording when all jobs finish.
-    Called from OnIdle on FL's main thread. Never blocks."""
+    Called from idle and MIDI wake callbacks. Never sleeps."""
     global _auto_recording
     if not _auto_jobs:
         return
@@ -1483,17 +1559,15 @@ def h_ui_scroll_to_channel(p):
 # ---- piano roll (staging only — real edit happens in pyscript via keystroke) ----
 
 def _stage_piano_roll_request(request):
-    PR_REQUEST.parent.mkdir(parents=True, exist_ok=True)
-    existing = []
-    if PR_REQUEST.exists():
-        try:
-            data = json.loads(PR_REQUEST.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                existing = data
-        except Exception:
-            existing = []
+    try:
+        with open(PR_REQUEST, "r", encoding="utf-8") as request_file:
+            existing = json.load(request_file)
+    except Exception:
+        existing = []
+    if not isinstance(existing, list):
+        existing = []
     existing.append(request)
-    PR_REQUEST.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    _write_json(PR_REQUEST, existing)
 
 
 def _prepare_piano_roll(channel, pattern):
@@ -1509,10 +1583,9 @@ def _prepare_piano_roll(channel, pattern):
 
 
 def _read_piano_roll_state():
-    if not PR_STATE.exists():
-        return None
     try:
-        return json.loads(PR_STATE.read_text(encoding="utf-8"))
+        with open(PR_STATE, "r", encoding="utf-8") as state_file:
+            return json.load(state_file)
     except Exception:
         return None
 
@@ -1635,6 +1708,7 @@ _HANDLERS = {
     # meta
     "meta.ping": h_meta_ping,
     "meta.info": h_meta_info,
+    "meta.introspect": h_meta_introspect,
     # transport
     "transport.start": h_transport_start,
     "transport.stop": h_transport_stop,
@@ -1784,110 +1858,44 @@ _HANDLERS = {
 # ----------------------------------------------------------------------------
 
 def OnInit():
-    global _server_thread
-    _log("initializing — script dir: %s" % SCRIPT_DIR)
-    _log("FL version: %s" % _safe(general.getVersion))
-    if _server_thread is None or not _server_thread.is_alive():
-        _server_thread = threading.Thread(target=_server_loop, daemon=True, name="fLMCP-TCP")
-        _server_thread.start()
-    _log("bridge ready on tcp://%s:%d" % (BRIDGE_HOST, BRIDGE_PORT))
+    global _started_at, _idle_calls, _midi_wakes, _last_id, _pending_response
+    try:
+        _started_at = time.monotonic()
+        _idle_calls = _midi_wakes = 0
+        _pending_response = None
+        # Suppress any command left by a previous controller session.
+        old_id = _read_command().get("id")
+        if type(old_id) is int:
+            _last_id = max(_last_id, old_id)
+        _write_heartbeat(force=True)
+        _log("bridge %s ready in %s" % (BRIDGE_VERSION, SCRIPT_DIR))
+    except Exception as e:
+        _log("initialization failed: %s" % e)
 
 
 def OnDeInit():
-    global _accept_socket
-    _log("deinit")
-    if _accept_socket is not None:
-        try:
-            _accept_socket.close()
-        except Exception:
-            pass
-        _accept_socket = None
-    # close client connections
-    for c in list(_known_clients):
-        try:
-            c.close()
-        except Exception:
-            pass
-    _known_clients.clear()
+    try:
+        _write_heartbeat(force=True, stopped=True)
+        _log("bridge stopped")
+    except Exception as e:
+        _log("deinitialization failed: %s" % e)
 
 
 def OnIdle():
-    """Drain up to N requests per idle tick on the FL main thread."""
-    global _idle_tick, _last_refresh_push
-    _idle_tick += 1
-    drained = 0
-    while drained < 32:
-        try:
-            client, req = _inbox.get_nowait()
-        except queue.Empty:
-            break
-        drained += 1
-        req_id = req.get("id", 0)
-        action = req.get("action", "")
-        params = req.get("params", {}) or {}
-        try:
-            result = _execute(action, params)
-            resp = {"id": req_id, "ok": True, "result": result}
-        except Exception as e:
-            tb = traceback.format_exc(limit=3)
-            resp = {"id": req_id, "ok": False, "error": "%s: %s" % (type(e).__name__, e), "traceback": tb}
-            _log("action %s error: %s" % (action, e))
-        try:
-            client.sendall(_pack_frame(resp))
-        except Exception as e:
-            _log("failed to send response: %s" % e)
-
-    # apply any due (non-blocking) automation points
+    global _idle_calls
     try:
-        _process_automation()
+        _idle_calls += 1
+        _run_bridge_tick()
     except Exception as e:
-        _log("automation processing error: %s" % e)
-
-    # push transport notifications every ~0.5s when playing
-    now = time.monotonic()
-    if _known_clients and (now - _last_refresh_push) > 0.5:
-        _last_refresh_push = now
-        try:
-            snap = h_transport_status({})
-            frame = _pack_frame({"event": "transport.tick", "data": snap})
-            for c in list(_known_clients):
-                try:
-                    c.sendall(frame)
-                except Exception:
-                    _known_clients.discard(c)
-        except Exception:
-            pass
-
-
-def OnMidiIn(event):
-    # We don't need MIDI for the primary channel; just ignore.
-    event.handled = False
+        _log("idle callback failed: %s" % e)
 
 
 def OnMidiMsg(event):
-    event.handled = False
-
-
-def OnRefresh(flags):
-    # push a refresh event to connected clients (so MCP server can invalidate cache)
+    global _midi_wakes
     try:
-        frame = _pack_frame({"event": "refresh", "data": {"flags": int(flags)}})
-        for c in list(_known_clients):
-            try:
-                c.sendall(frame)
-            except Exception:
-                _known_clients.discard(c)
-    except Exception:
-        pass
-
-
-def OnProjectLoad(status):
-    try:
-        frame = _pack_frame({"event": "projectLoad", "data": {"status": status}})
-        for c in list(_known_clients):
-            try:
-                c.sendall(frame)
-            except Exception:
-                _known_clients.discard(c)
-    except Exception:
-        pass
+        if event.status == WAKE_STATUS and event.data1 == WAKE_CONTROLLER and 1 <= event.data2 <= 127:
+            event.handled = True
+            _midi_wakes += 1
+            _run_bridge_tick()
+    except Exception as e:
+        _log("MIDI callback failed: %s" % e)
