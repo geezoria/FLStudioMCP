@@ -127,7 +127,9 @@ and run `live_check.py --write` too: the stubs can't tell you what FL really doe
 - Heavy dependencies (numpy, librosa, sounddevice, dearpygui, basic-pitch) are
   imported **lazily** inside the voice/audio modules. `tests/test_lazy_imports.py`
   enforces this.
-- The distribution is named `flmcp`. The import package stays `fl_studio_mcp`.
+- The PyPI distribution is named `flmcp-studio` (PyPI rejects `flmcp` as too similar to
+  `f1-mcp`). Its main command is `flmcp`, with a `flmcp-studio` alias so `uvx flmcp-studio`
+  works. The import package stays `fl_studio_mcp`, and the MCP client entry is `flmcp`.
   The `fl-studio-mcp` console script is a legacy alias.
 - Keep `BRIDGE_VERSION` in the bridge equal to `__version__`. `test_cli.py`
   checks this.
@@ -139,9 +141,10 @@ and run `live_check.py --write` too: the stubs can't tell you what FL really doe
    `version` in `pyproject.toml`, `__version__` in
    `src/fl_studio_mcp/__init__.py`, `BRIDGE_VERSION` in the bridge, both
    version fields in `server.json`, `version` in `mcpb/manifest.json`, and
-   `version` plus the `flmcp==` pin in `mcpb/pyproject.toml`.
+   `version` plus the `flmcp-studio==` pin in `mcpb/pyproject.toml`.
 2. Move *Unreleased* to a dated section in `CHANGELOG.md`.
-3. Tag `vX.Y.Z`. The maintainer publishes to PyPI and the MCP Registry, then
-   attaches `flmcp-X.Y.Z.mcpb` (`npx @anthropic-ai/mcpb pack mcpb`, or CI's
-   `mcpb` artifact) to the GitHub release. The bundle installs the pinned
-   version from PyPI, so attach it only after the upload.
+3. Push the tag `vX.Y.Z`. `.github/workflows/release.yml` checks that it matches
+   `pyproject.toml`, publishes to PyPI (trusted publishing, environment `pypi`),
+   then to the MCP Registry (GitHub OIDC), and creates the GitHub release with
+   the wheel, the sdist and `flmcp-X.Y.Z.mcpb`. Agents push a release tag only
+   when the maintainer asks.

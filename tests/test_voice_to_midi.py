@@ -106,4 +106,4 @@ def test_ensure_audio_deps_contract():
         assert res is None
     else:
         assert isinstance(res, str)
-        assert "flmcp[audio]" in res
+        assert "flmcp-studio[audio]" in res

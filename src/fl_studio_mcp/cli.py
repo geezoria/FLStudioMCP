@@ -242,7 +242,7 @@ def server_command(mode: str = "auto") -> tuple[str, list[str]]:
     exe = Path(sys.executable)
     ephemeral = any(part in str(exe).lower() for part in ("archive-v0", "\\uv\\cache", "/uv/cache"))
     if mode == "uvx" or (mode == "auto" and ephemeral):
-        return "uvx", ["flmcp"]
+        return "uvx", ["flmcp-studio"]
     return str(exe), ["-m", "fl_studio_mcp"]
 
 
