@@ -3,7 +3,9 @@
 Pipeline:
   1. MCP tool stages one or more actions into `fLMCP_request.json` in FL's
      Piano roll scripts folder.
-  2. MCP tool sends Ctrl+Alt+Y to the FL Studio window (Win32 SendInput).
+  2. On Windows the server runs the pyscript from the open piano roll's Tools
+     menu with posted window messages (`fl_windows.run_piano_roll_script`),
+     falling back to Ctrl+Alt+Y ("Run last script again").
   3. FL fires `ComposeWithLLM.pyscript` which drains the request queue via
      `flpianoroll` and writes `fLMCP_state.json`.
   4. MCP tool reads state file and returns it.
@@ -13,12 +15,10 @@ threads are prohibited) because the pyscript finishes quickly and doesn't
 try to spawn any threads.
 
 Requirements on user side:
-  * `ComposeWithLLM.pyscript` must be installed (done by install_windows.ps1).
-  * It must be the currently-selected piano-roll script (piano roll window →
-    scripts dropdown → pick `ComposeWithLLM`).
-  * The target pattern's piano roll must be open & focused when we fire the
-    hotkey. Our keystroke helper brings FL Studio to the foreground, but the
-    user should have the correct channel's piano roll open.
+  * `ComposeWithLLM.pyscript` must be installed (`flmcp install` does it).
+  * A piano roll must be open. Tools given a `channel` open that channel's
+    piano roll through the controller bridge first.
+  * macOS: the user runs the script (Tools > Scripts > ComposeWithLLM).
 """
 
 from __future__ import annotations
@@ -58,9 +58,9 @@ def register(tools: ToolRegistrar) -> None:
         `notes`: list of {midi: int, time_bars: float, duration_bars: float,
                           velocity: 0..1, pan?: -1..1}. MIDI pitches are 0..127.
 
-        Set clear_first to replace notes. The controller bridge can try to open a
-        0-based channel and 1-based pattern. Verify the target piano roll is
-        focused in FL Studio with ComposeWithLLM selected before writing.
+        Set clear_first to replace notes. Pass a 0-based channel (and 1-based
+        pattern) to open that piano roll first; otherwise the notes go into the
+        piano roll that is open.
         """
         actions: list[dict] = []
         if clear_first:

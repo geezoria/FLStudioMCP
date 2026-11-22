@@ -3,8 +3,10 @@ File-based bridge for piano roll operations.
 
 Works without loopMIDI / any MIDI device — the MCP server writes a request
 file that the `ComposeWithLLM.pyscript` (piano roll pyscript) picks up when
-it runs. The server triggers the pyscript by synthesising Ctrl+Alt+Y into the
-FL Studio window. The pyscript then writes a state file we read back.
+it runs. On Windows the server runs the pyscript from the piano roll's Tools
+menu with posted window messages (`fl_windows.run_piano_roll_script`), and falls
+back to synthesising Ctrl+Alt+Y ("Run last script again"). The pyscript then
+writes a state file we read back.
 
 This complements `bridge_client.py` (commands to the MIDI controller script).
 """
@@ -27,9 +29,12 @@ STATE_FILE = PR_DIR / "fLMCP_state.json"
 RESPONSE_FILE = PR_DIR / "fLMCP_response.json"
 
 
+SCRIPT_NAME = "ComposeWithLLM"
+
+
 def is_installed() -> bool:
     """True if the ComposeWithLLM pyscript is present on disk."""
-    return (PR_DIR / "ComposeWithLLM.pyscript").exists()
+    return (PR_DIR / f"{SCRIPT_NAME}.pyscript").exists()
 
 
 def _read_json(path: Path) -> Any | None:
@@ -99,11 +104,15 @@ def open_piano_roll(channel: int | None = None, pattern: int | None = None) -> d
 
 def stage_and_run(actions: list[dict], wait_sec: float = 3.0,
                   channel: int | None = None, pattern: int | None = None) -> dict:
-    """Queue one or more piano-roll actions, fire the hotkey, wait for state.
+    """Queue one or more piano-roll actions, run the pyscript, wait for state.
 
     If `channel` is given and the controller bridge is online, the correct channel's
     piano roll is opened first (best-effort) so the edits route to it.
+
+    When the server triggered the script but no state came back, the queue is
+    emptied, so the edits can't run later by surprise (on the next script run).
     """
+    from . import fl_windows
     from .keystroke import send_hotkey_windows
 
     if not is_installed():
@@ -122,19 +131,37 @@ def stage_and_run(actions: list[dict], wait_sec: float = 3.0,
     for a in actions:
         _append_request(a)
 
-    fired = send_hotkey_windows()
-    state = wait_for_state(wait_sec) if fired else None
+    run = fl_windows.run_piano_roll_script(SCRIPT_NAME, PR_DIR)
+    if run["ok"]:
+        trigger = "tools_menu"
+    elif send_hotkey_windows():
+        trigger = "hotkey"
+    else:
+        trigger = None
+    state = wait_for_state(wait_sec) if trigger else None
+    if trigger and state is None:
+        clear_request_queue()
 
     result = {
-        "ok": bool(fired and state is not None),
-        "hotkey_sent": fired,
+        "ok": state is not None,
+        "trigger": trigger,
+        "hotkey_sent": trigger == "hotkey",
         "staged_actions": len(actions),
         "state": state,
-        "note": None if fired else
-            "Could not auto-press Ctrl+Alt+Y. Make sure FL Studio is in the "
-            "foreground and ComposeWithLLM is the active piano-roll script, "
-            "then press Ctrl+Alt+Y manually.",
+        "note": None,
     }
+    if trigger is None:
+        result["note"] = (
+            f"Could not run {SCRIPT_NAME} ({run['reason']}). Open the piano roll and "
+            f"run Tools > Scripts > {SCRIPT_NAME}, or press Ctrl+Alt+Y (Cmd+Opt+Y) "
+            "if it was the last script run. The edits are queued until then."
+        )
+    elif state is None:
+        result["note"] = (
+            f"{SCRIPT_NAME} did not answer within {wait_sec:g} s, so nothing was "
+            f"changed and the queue was emptied. Menu: {run.get('reason') or 'opened'}. "
+            "Check that a piano roll is open and no dialog is showing, then retry."
+        )
     if open_status is not None:
         result["open_status"] = open_status
     return result

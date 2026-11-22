@@ -30,8 +30,8 @@ def register(mcp: MCPServer) -> None:
                chosen style, one repeat per bar in 4/4, and the new pattern index.
             3. Use channel_get_step_sequence for each written channel and
                transport_status to verify the steps and tempo. If using piano roll
-               instead, have the user open an empty drum instrument with a known
-               MIDI map and ComposeWithLLM selected. Use gen_emit_drum_pattern_notes
+               instead, open the piano roll of an empty drum instrument with a known
+               MIDI map (ui_open_piano_roll_for_channel). Use gen_emit_drum_pattern_notes
                with step_bars=0.0625 for 16 steps per bar and clear_first=false.
                Read back with piano_roll_read and verify pitches and loop length.
             4. Report the pattern, style, tempo and verified drum parts. If the
@@ -50,9 +50,8 @@ def register(mcp: MCPServer) -> None:
                custom voice leading, use gen_list_chord_qualities and gen_chord_notes
                to preview each voicing, then lay out a single piano_roll_add_notes call.
             2. Before writing, use channel_all and pattern_current to resolve the
-               intended instrument and pattern where available. Confirm the target
-               piano roll is focused with ComposeWithLLM selected. Read it with
-               piano_roll_read and use an empty destination or agree on an append
+               intended instrument and pattern where available, and pass them as
+               channel and pattern. Read the target with piano_roll_read and use an empty destination or agree on an append
                position. Keep clear_first=false unless the user requests replacement.
             3. Write the selected chords in bars. Read back with piano_roll_read,
                checking actual pitches, starts and durations. Summarize the chords
@@ -70,8 +69,8 @@ def register(mcp: MCPServer) -> None:
             2. Once I'm ready, call voice_record_and_transcribe in monophonic mode.
                Review note count, timing and confidence. If the capture is unusable,
                report the issue and ask for another take before editing.
-            3. Check piano_roll_read on the intended piano roll with ComposeWithLLM
-               selected. Use voice_notes_to_piano_roll with the current project BPM,
+            3. Open the intended piano roll (ui_open_piano_roll_for_channel) and
+               check it with piano_roll_read. Use voice_notes_to_piano_roll with the current project BPM,
                the retained notes, and clear_first=false in an empty destination.
                Apply optional scale snapping or quantization only as agreed.
             4. Read piano_roll_read again. Compare note count, pitches and timing
@@ -87,8 +86,8 @@ def register(mcp: MCPServer) -> None:
             1. Call audio_analyze on the source for tempo and key. Call
                gen_list_dnb_styles and choose a style that suits the source.
                Use 174 BPM unless I specify another target.
-            2. Find a fresh piano roll and confirm it is focused with ComposeWithLLM
-               selected. Call piano_roll_read before editing. Call song_to_dnb_flip
+            2. Open a fresh piano roll (ui_open_piano_roll_for_channel on an unused
+               pattern). Call piano_roll_read before editing. Call song_to_dnb_flip
                with the source as audio_path, the target BPM, style, dnb_bars=4 and
                clear_first=false. The tool writes drums, bass and melody to a single
                piano roll. Explain the layer layout before treating it as a mix.

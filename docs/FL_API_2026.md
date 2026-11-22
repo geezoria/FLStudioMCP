@@ -47,7 +47,7 @@ the exact argument list is a best guess — verify with `meta.introspect`).
 | showPicker | ui | `(mode, category=-1)` | 41 | 26.1; mode 0 plugin picker, 1 project picker |
 | getSwing / setSwing | channels | `() -> float` / `(value)` | 42 | 26.1; the manual calls them getShuffle/setShuffle, the binary exports getSwing/setSwing. Verified: Channel rack global swing, no index, clamped to 0..1 |
 | clonePattern | patterns | `(index=-1, destIndex=-1)` | 43 | `destIndex` added in 26.1.1. Verified: the copy goes to the next free pattern (or `destIndex`) and becomes the selected pattern |
-| clearPattern | patterns | `(index=-1)` | 44 | 26.1.3. **Verified: opens a modal Confirm dialog** and blocks the script (and FL's UI thread) until the user answers |
+| clearPattern | patterns | `(index=-1)` | 44 | 26.1.3. An earlier check saw it open a modal Confirm dialog that blocks the script (and FL's UI thread) until the user answers. On 26.1.7 it cleared notes and steps at once, with no dialog |
 | duplicatePatternData | patterns | `(index)` | 45 | 26.1.4 |
 | getPluginMuteState / setPluginMuteState | mixer | `(index, plugIndex)` / `(index, plugIndex, value)` | – | 2025.2; new `REC_Plug_Mute`. Arity verified; value semantics not yet (empty slots report 1, and setting 0 sticks) |
 | releaseCC | device | ? | – | 2025.2; lets automation control a CC again |

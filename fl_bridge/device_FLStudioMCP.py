@@ -682,16 +682,15 @@ def h_patterns_set_length(p):
 def h_patterns_clear(p):
     """patterns.clearPattern(index) exists from FL 2026 (26.1.3).
 
-    FL shows a modal Confirm dialog and this call returns only once the user
-    answers it, so the server reports a pending confirmation on timeout.
+    FL 26.1.7 clears at once. Earlier 2026 builds were reported to ask in a
+    modal Confirm dialog first; this call then returns only once the user
+    answers, and the server reports a pending confirmation on timeout.
     """
     index = _check_pattern_index(int(p["index"]))
     if not hasattr(patterns, "clearPattern"):
         return _unsupported("Clearing a pattern", "FL Studio 2026 (26.1.3+)")
     patterns.clearPattern(index)
-    return {"ok": True, "index": index, "name": patterns.getPatternName(index),
-            "cleared": bool(_safe(patterns.isPatternDefault, index))
-            if hasattr(patterns, "isPatternDefault") else None}
+    return {"ok": True, "index": index, "name": patterns.getPatternName(index)}
 
 
 def h_patterns_find_by_name(p):

@@ -423,7 +423,7 @@ def _build_gui():
         with dpg.group(horizontal=True):
             dpg.add_button(label="↪  SEND TO FL STUDIO", width=200, height=38,
                            callback=_send_to_fl)
-            dpg.add_text("(make sure the piano roll has ComposeWithLLM selected)")
+            dpg.add_text("(writes into the piano roll open in FL Studio)")
 
         dpg.add_separator()
 

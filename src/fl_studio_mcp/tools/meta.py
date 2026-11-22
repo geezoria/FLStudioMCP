@@ -40,8 +40,9 @@ def _piano_roll_status() -> dict:
         "pyscript_dir": str(PR_DIR),
         "last_state": pr_state(),
         "hint": (
-            "Open any channel's piano roll, pick `ComposeWithLLM` from the "
-            "piano-roll scripts dropdown once. No MIDI device required."
+            "No setup on Windows: the tools run ComposeWithLLM from the open "
+            "piano roll's Tools menu. Pass a channel to open its piano roll. "
+            "On macOS run Tools > Scripts > ComposeWithLLM when edits are queued."
         ),
     }
 

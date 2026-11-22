@@ -65,8 +65,11 @@ or enable the bridge by hand once: `Options → MIDI Settings → Input` → sel
 the **fLMCP** row (or any MIDI input) → *Controller type* = **fLMCP Bridge** →
 make sure the row is enabled.
 
-For piano-roll writing, open any piano roll, click the scripts menu and pick
-**ComposeWithLLM** once. FL remembers it.
+Piano-roll writing needs no setup on Windows: the server runs the
+**ComposeWithLLM** script from the piano roll's *Tools* menu itself, without
+taking over the mouse, the keyboard or the window focus. On macOS, run
+*Tools → Scripts → ComposeWithLLM* (or `Cmd+Opt+Y` after the first run) when a
+tool says the edits are queued.
 
 **3. Restart your AI app and say *"ping FL Studio"*.** If it can't connect:
 
@@ -193,7 +196,7 @@ MP3 decoding needs `ffmpeg` on `PATH`.
    └──────────── result ◄── mcp_response.json ◄── executes FL API on FL's main thread
                             mcp_heartbeat.json (≈1 s, liveness + versions)
 
- Piano roll:  server stages fLMCP_request.json → Ctrl+Alt+Y → ComposeWithLLM.pyscript
+ Piano roll:  server stages fLMCP_request.json → Tools menu → ComposeWithLLM.pyscript
               edits notes through flpianoroll → writes fLMCP_state.json
 ```
 
@@ -224,7 +227,7 @@ Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · what FL's API can't d
 | MIDI wake (required on FL 2026) | ✅ loopMIDI | ❌ not yet: relies on `OnIdle`, which FL 2026 did not call on Windows (untested on macOS) |
 | `flmcp install` client registration | ✅ | ✅ |
 | Automatic controller assignment | ✅ | manual |
-| Piano-roll writing (hotkey trigger) | ✅ | manual `Ctrl+Alt+Y` |
+| Piano-roll writing (script runs automatically) | ✅ | manual: *Tools → Scripts → ComposeWithLLM* |
 | Voice / audio tools | ✅ | ✅ |
 
 ## Troubleshooting
@@ -240,7 +243,7 @@ the bridge heartbeat, a live ping and version mismatches.
 | Calls time out while FL shows a dialog | A modal dialog (save prompt, plugin error, "Confirm") blocks FL's UI thread and the bridge with it. Close the dialog. |
 | Doctor says the script is outdated | `uvx flmcp install`, then restart FL (or *MIDI Settings → Update scripts*). |
 | Commands are slow (~0.5–1 s) | Install loopMIDI and re-run `flmcp install` so the MIDI wake port exists. |
-| Piano-roll edits don't apply | Select **ComposeWithLLM** in the piano-roll scripts menu once; if FL can't be brought to the foreground, press `Ctrl+Alt+Y` yourself. |
+| Piano-roll edits don't apply | Pass `channel` so the tool opens that piano roll, and close any FL dialog. The result's `note` says why the script didn't run. As a last resort run *Tools → Scripts → ComposeWithLLM* in the piano roll yourself. |
 | `playlist_place_pattern` returns an error | FL's API doesn't expose clip placement — see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). |
 | `voice_*` / `audio_*` say a module is missing | Install the `[audio]` extra. |
 | Upgrading from 0.3 (`fl-studio-mcp`) | `uvx flmcp install` replaces the old `fl-studio-mcp` client entries and the old TCP bridge script. |

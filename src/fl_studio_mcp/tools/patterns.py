@@ -81,8 +81,8 @@ def register(tools: ToolRegistrar) -> None:
     def pattern_clear(index: int) -> dict[str, Any]:
         """Remove all notes and steps from a 1-based pattern, keeping the pattern. FL Studio 2026+.
 
-        FL asks the user to confirm in a dialog; until they answer, FL (and every
-        other tool) waits. If nobody answers in time this returns
+        Some FL builds ask the user to confirm in a dialog; until they answer, FL
+        (and every other tool) waits. If nobody answers in time this returns
         pending_confirmation=true: ask the user to click Yes or No in FL Studio.
         Undo with project_undo.
         """

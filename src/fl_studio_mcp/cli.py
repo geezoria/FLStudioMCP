@@ -406,7 +406,8 @@ def cmd_install(a: argparse.Namespace) -> int:
     print("  1. Start (or restart) FL Studio. If `flmcp doctor` says the bridge is offline, close FL")
     print("     and re-run this install, or set it by hand: Options > MIDI Settings > Input: select")
     print(f"     '{a.port}' (or any MIDI input), Controller type = 'fLMCP Bridge', Enable.")
-    print("  2. For piano-roll writing: open a piano roll, Scripts menu > ComposeWithLLM (once).")
+    print("  2. Piano-roll writing needs no setup on Windows. On macOS run Tools > Scripts >")
+    print("     ComposeWithLLM in the piano roll when a tool says the edits are queued.")
     print("  3. Restart your AI app and ask it: \"ping FL Studio\".  Diagnose with `flmcp doctor`.")
     return 0
 

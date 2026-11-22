@@ -142,3 +142,170 @@ def _top(user32, hwnd: int) -> int:
     rect = wintypes.RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(rect))
     return rect.top
+
+
+# --- Running a piano-roll script -------------------------------------------
+#
+# FL's API can't run a piano-roll script, and "Run last script again"
+# (Ctrl+Alt+Y) only works after the user ran the script once in this session.
+# FL keeps no "last script" across restarts. So we open the piano roll's Tools
+# menu (the wrench on its caption bar) with a posted click and pick the script
+# with posted arrow keys. FL's popup menu follows the real mouse cursor and
+# ignores the coordinates of posted mouse messages, but it reads posted keys.
+# Nothing here moves the cursor or brings FL to the foreground.
+#
+# The menu is one list in two columns: the built-in tools, then the Scripts
+# column, which ends with every .pyscript from FL's own folder and the user's,
+# sorted by name. Up from no selection wraps to the last item, so a script's
+# position counted from the end selects it no matter how long the built-in
+# part is, or whether "Run last script again" is enabled.
+
+PIANO_ROLL_FORM_CLASS = "TEventEditForm"
+PIANO_ROLL_TITLE = "Piano roll"
+CAPTION_CLASS = "TNewCaption"
+POPUP_MENU_CLASS = "TQuickPopupMenuWindow"
+# The Tools icon on the piano roll's caption bar, and the bar's height, at 100 %
+# display scaling (FL 2026).
+TOOLS_ICON = (33, 11)
+CAPTION_HEIGHT = 23
+SYSTEM_SCRIPTS = ("System", "Config", "Piano roll scripts")
+WM_MOUSEMOVE = 0x0200
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+VK_RETURN = 0x0D
+VK_ESCAPE = 0x1B
+VK_UP = 0x26
+
+
+def script_steps_from_end(script: str, names) -> int | None:
+    """Up presses that select `script` in the Tools menu, given every script name
+    FL lists (without the .pyscript extension). None when it isn't listed."""
+    ordered = sorted({name.casefold() for name in names})
+    key = script.casefold()
+    if key not in ordered:
+        return None
+    return len(ordered) - ordered.index(key)
+
+
+def piano_roll_scripts(*folders) -> list[str]:
+    """Names of the .pyscript files in `folders`, as FL's Tools menu lists them."""
+    from pathlib import Path
+
+    names = []
+    for folder in folders:
+        try:
+            names += [p.stem for p in Path(folder).glob("*.pyscript") if p.is_file()]
+        except OSError:
+            continue
+    return names
+
+
+def _process_dir(pid: int):
+    import ctypes
+    from ctypes import wintypes
+    from pathlib import Path
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        size = wintypes.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return None
+        return Path(buf.value).parent
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _rect(user32, hwnd: int) -> tuple[int, int, int, int]:
+    import ctypes
+    from ctypes import wintypes
+
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def _post_keys(user32, hwnd: int, keys) -> None:
+    for vk in keys:
+        user32.PostMessageW(hwnd, WM_KEYDOWN, vk, 0x00000001)
+        user32.PostMessageW(hwnd, WM_KEYUP, vk, 0xC0000001)
+
+
+def _popup_menus(user32, pids) -> set[int]:
+    return {hwnd for hwnd, cls, _, pid in _windows(user32)
+            if cls == POPUP_MENU_CLASS and pid in pids}
+
+
+def _find_piano_roll(user32, mains) -> int | None:
+    for main in mains:
+        for hwnd, cls, title, _ in _windows(user32, main):
+            if (cls == PIANO_ROLL_FORM_CLASS and title.startswith(PIANO_ROLL_TITLE)
+                    and user32.IsWindowVisible(hwnd)):
+                return hwnd
+    return None
+
+
+def run_piano_roll_script(script: str, user_folder, wait: float = 1.5) -> dict:
+    """Run a piano-roll script from the open piano roll's Tools menu.
+
+    Returns {"ok": True, "steps": n} once Enter was posted on the script's menu
+    item, or {"ok": False, "reason": ...}. It doesn't wait for the script to run.
+    """
+    user32 = _user32()
+    if user32 is None:
+        return {"ok": False, "reason": "only available on Windows"}
+    try:
+        windows = _windows(user32)
+        mains = [(hwnd, pid) for hwnd, cls, _, pid in windows if cls == MAIN_FORM_CLASS]
+        if not mains:
+            return {"ok": False, "reason": "FL Studio's window was not found"}
+        pids = {pid for _, pid in mains}
+        deadline = time.monotonic() + wait
+        form = _find_piano_roll(user32, [hwnd for hwnd, _ in mains])
+        while form is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+            form = _find_piano_roll(user32, [hwnd for hwnd, _ in mains])
+        if form is None:
+            return {"ok": False, "reason": "no piano roll is open"}
+
+        exe_dir = _process_dir(mains[0][1])
+        folders = [user_folder] + ([exe_dir.joinpath(*SYSTEM_SCRIPTS)] if exe_dir else [])
+        steps = script_steps_from_end(script, piano_roll_scripts(*folders))
+        if steps is None:
+            return {"ok": False, "reason": f"{script}.pyscript is not in {folders}"}
+
+        captions = sorted(
+            (_rect(user32, hwnd)[1], hwnd) for hwnd, cls, _, _ in _windows(user32, form)
+            if cls == CAPTION_CLASS and user32.GetParent(hwnd) == form
+        )
+        if not captions:
+            return {"ok": False, "reason": "the piano roll's caption bar was not found"}
+        caption = captions[0][1]
+        left, top, _, bottom = _rect(user32, caption)
+        scale = (bottom - top) / CAPTION_HEIGHT or 1.0
+        x, y = round(TOOLS_ICON[0] * scale), round(TOOLS_ICON[1] * scale)
+        lparam = (y << 16) | x
+
+        for menu in _popup_menus(user32, pids):  # a menu left open would take the keys
+            _post_keys(user32, menu, [VK_ESCAPE])
+        before = _popup_menus(user32, pids)
+        user32.PostMessageW(caption, WM_MOUSEMOVE, 0, lparam)
+        user32.PostMessageW(caption, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        user32.PostMessageW(caption, WM_LBUTTONUP, 0, lparam)
+        menu = None
+        menu_deadline = time.monotonic() + 1.0
+        while menu is None and time.monotonic() < menu_deadline:
+            opened = _popup_menus(user32, pids) - before
+            menu = next(iter(opened)) if opened else None
+            if menu is None:
+                time.sleep(0.02)
+        if menu is None:
+            return {"ok": False, "reason": "the piano roll's Tools menu did not open"}
+        _post_keys(user32, menu, [VK_UP] * steps + [VK_RETURN])
+        return {"ok": True, "steps": steps}
+    except Exception as exc:
+        log.debug("could not run %s from the piano roll", script, exc_info=True)
+        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
