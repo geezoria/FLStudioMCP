@@ -838,7 +838,7 @@ def h_channels_set_color(p):
 
 
 def h_channels_route_to_mixer(p):
-    idx = int(p["index"]); tr = int(p["mixer_track"])
+    idx = int(p["index"]); tr = _mixer_track(p["mixer_track"])
     channels.setTargetFxTrack(idx, tr)
     return {"index": idx, "mixer_track": channels.getTargetFxTrack(idx, True)}
 
@@ -938,6 +938,21 @@ def _mx_info(i):
     }
 
 
+def _mixer_track(value):
+    """Validate a mixer track index: 0 is Master, 1..N the inserts of this project.
+
+    FL 2026 projects can have fewer inserts than 125, and FL either raises a bare
+    "Index out of range" or clamps silently (setTargetFxTrack), so check first.
+    """
+    tr = int(value)
+    # trackCount() also counts Master and the hidden "Current" track.
+    top = int(_safe(mixer.trackCount) or 127) - 2
+    if not 0 <= tr <= top:
+        raise ValueError("mixer track %d out of range (0 = Master, 1-%d are the inserts of this project)"
+                         % (tr, top))
+    return tr
+
+
 def h_mixer_count(_):
     # trackCount() includes Master and the hidden "Current" track; FL 2025.1+
     # getTrackCount() returns only the inserts.
@@ -948,7 +963,7 @@ def h_mixer_count(_):
 
 
 def h_mixer_track_info(p):
-    tr = int(p["track"])
+    tr = _mixer_track(p["track"])
     info = _mx_info(tr)
     # fx slots
     slots = []
@@ -976,17 +991,17 @@ def h_mixer_all_tracks(p):
 
 
 def h_mixer_set_volume(p):
-    mixer.setTrackVolume(int(p["track"]), float(p["volume"]))
-    return _mx_info(int(p["track"]))
+    mixer.setTrackVolume(_mixer_track(p["track"]), float(p["volume"]))
+    return _mx_info(_mixer_track(p["track"]))
 
 
 def h_mixer_set_pan(p):
-    mixer.setTrackPan(int(p["track"]), float(p["pan"]))
-    return _mx_info(int(p["track"]))
+    mixer.setTrackPan(_mixer_track(p["track"]), float(p["pan"]))
+    return _mx_info(_mixer_track(p["track"]))
 
 
 def h_mixer_mute(p):
-    tr = int(p["track"]); muted = p.get("muted")
+    tr = _mixer_track(p["track"]); muted = p.get("muted")
     if muted is None:
         mixer.muteTrack(tr, -1)
     else:
@@ -995,7 +1010,7 @@ def h_mixer_mute(p):
 
 
 def h_mixer_solo(p):
-    tr = int(p["track"]); solo = p.get("solo")
+    tr = _mixer_track(p["track"]); solo = p.get("solo")
     mode = int(p.get("mode", 3))
     if solo is None:
         mixer.soloTrack(tr, -1, mode)
@@ -1005,7 +1020,7 @@ def h_mixer_solo(p):
 
 
 def h_mixer_arm(p):
-    tr = int(p["track"]); armed = p.get("armed")
+    tr = _mixer_track(p["track"]); armed = p.get("armed")
     # armTrack(index) is toggle-only (no value arg), so honour an explicit
     # desired state by toggling only when it differs from the current state.
     is_armed = mixer.isTrackArmed(tr) == 1
@@ -1015,22 +1030,22 @@ def h_mixer_arm(p):
 
 
 def h_mixer_set_name(p):
-    mixer.setTrackName(int(p["track"]), p.get("name", ""))
-    return _mx_info(int(p["track"]))
+    mixer.setTrackName(_mixer_track(p["track"]), p.get("name", ""))
+    return _mx_info(_mixer_track(p["track"]))
 
 
 def h_mixer_set_color(p):
-    mixer.setTrackColor(int(p["track"]), _color_to_int(p["color"]))
-    return _mx_info(int(p["track"]))
+    mixer.setTrackColor(_mixer_track(p["track"]), _color_to_int(p["color"]))
+    return _mx_info(_mixer_track(p["track"]))
 
 
 def h_mixer_set_stereo_sep(p):
-    mixer.setTrackStereoSep(int(p["track"]), float(p["separation"]))
-    return _mx_info(int(p["track"]))
+    mixer.setTrackStereoSep(_mixer_track(p["track"]), float(p["separation"]))
+    return _mx_info(_mixer_track(p["track"]))
 
 
 def h_mixer_set_send_level(p):
-    src = int(p["src_track"]); dst = int(p["dst_track"]); lvl = float(p["level"])
+    src = _mixer_track(p["src_track"]); dst = _mixer_track(p["dst_track"]); lvl = float(p["level"])
     # ensure the route exists, then set its level
     mixer.setRouteTo(src, dst, True, False)
     if hasattr(mixer, "setRouteToLevel"):
@@ -1042,15 +1057,15 @@ def h_mixer_set_send_level(p):
 
 def h_mixer_route(p):
     enabled = bool(p.get("enabled", True))
-    mixer.setRouteTo(int(p["src_track"]), int(p["dst_track"]), enabled, False)
+    mixer.setRouteTo(_mixer_track(p["src_track"]), _mixer_track(p["dst_track"]), enabled, False)
     mixer.afterRoutingChanged()
     return {"enabled": enabled,
-            "active": mixer.getRouteSendActive(int(p["src_track"]), int(p["dst_track"]))
+            "active": mixer.getRouteSendActive(_mixer_track(p["src_track"]), _mixer_track(p["dst_track"]))
             if hasattr(mixer, "getRouteSendActive") else None}
 
 
 def h_mixer_fx_slots(p):
-    tr = int(p["track"])
+    tr = _mixer_track(p["track"])
     slots = []
     for s in range(10):
         try:
@@ -1064,12 +1079,12 @@ def h_mixer_fx_slots(p):
 
 
 def h_mixer_select(p):
-    mixer.setActiveTrack(int(p["track"]))
-    return {"selected": int(p["track"])}
+    mixer.setActiveTrack(_mixer_track(p["track"]))
+    return {"selected": _mixer_track(p["track"])}
 
 
 def h_mixer_get_eq(p):
-    tr = int(p["track"])
+    tr = _mixer_track(p["track"])
     band_count = mixer.getEqBandCount() if hasattr(mixer, "getEqBandCount") else 3
     bands = []
     for b in range(band_count):
@@ -1083,7 +1098,7 @@ def h_mixer_get_eq(p):
 
 
 def h_mixer_set_eq_band(p):
-    tr = int(p["track"]); band = int(p["band"])
+    tr = _mixer_track(p["track"]); band = int(p["band"])
     if p.get("gain") is not None:
         _safe(mixer.setEqGain, tr, band, float(p["gain"]))
     if p.get("frequency") is not None:
@@ -1095,7 +1110,7 @@ def h_mixer_set_eq_band(p):
 
 def h_mixer_link_channel(p):
     """Link a channel to a mixer track. `mode` legacy param is kept for API compat."""
-    ch = int(p["channel"]); tr = int(p["track"])
+    ch = int(p["channel"]); tr = _mixer_track(p["track"])
     select = bool(p.get("select", False))
     if hasattr(mixer, "linkChannelToTrack"):
         mixer.linkChannelToTrack(ch, tr, select)
@@ -1278,7 +1293,7 @@ def h_plugins_show_editor(p):
 
 
 def h_plugins_list_mixer_track(p):
-    tr = int(p["track"])
+    tr = _mixer_track(p["track"])
     out = []
     for s in range(10):
         try:
@@ -1653,7 +1668,7 @@ def h_automation_record_channel_pan(p):
 
 
 def h_automation_record_mixer_volume(p):
-    tr = int(p["track"])
+    tr = _mixer_track(p["track"])
     return _enqueue_automation(
         p.get("points", []),
         lambda v: mixer.setTrackVolume(tr, v),

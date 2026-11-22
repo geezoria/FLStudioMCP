@@ -53,7 +53,7 @@ command.
 - **FL Studio 2026 API support** (gated, so FL 2024/2025 keep working):
   - `pattern_set_length`, which really sets the length now (in bars, beats or
     steps; FL's unit turned out to be steps, not beats as documented).
-  - New `pattern_clear` tool. FL asks the user to confirm, and the tool says so.
+  - New `pattern_clear` tool, which empties a pattern's notes and steps.
   - `pattern_clone` can copy into a chosen pattern (`dest_index`).
   - New `channel_get_swing` / `channel_set_swing` tools for the Channel rack swing.
   - New `ui_show_picker` tool, which opens the plugin or project picker.
@@ -69,6 +69,10 @@ command.
   issue and PR templates, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, and a
   generated `docs/TOOLS.md` (`scripts/gen_tools_doc.py`).
 - `docs/FL_API_2026.md`: FL 2026 scripting API changes (API 45).
+- `scripts/live_check.py` (replaces `smoke_test.py`) runs every read-only tool
+  against a running FL through the real MCP server. With `--write` it also runs
+  the edits, each one restored afterwards, a pattern lifecycle, and every
+  piano-roll tool on a scratch pattern. 103 checks pass on FL 26.1.7.
 
 ### Changed
 
@@ -77,9 +81,27 @@ command.
 - Bridge, CLI and FL user data folder detection honour FL's *Shared data*
   registry setting and `FLMCP_BRIDGE_DIR`.
 - Rewrote README, ARCHITECTURE and LIMITATIONS for the new transport.
+- **Piano-roll tools need no setup on Windows.** The server runs ComposeWithLLM
+  from the piano roll's Tools menu with posted window messages, so it doesn't
+  depend on the script being the selected one, on focus, or on Ctrl+Alt+Y. FL
+  doesn't come to the front and the mouse and keyboard stay free. It falls
+  back to the hotkey, and results report which one ran in `trigger`
+  (`tools_menu` or `hotkey`).
 
 ### Fixed
 
+- Tool errors reach the model. MCP 2 replaces any exception that isn't a
+  `ToolError` with "Error executing tool X", so the model never learned that a
+  bridge call failed with, say, a bad index, or that a call timed out. Every
+  tool now passes its error text on.
+- Mixer tools check the track against the project's inserts. FL 2026 projects
+  can have fewer than 125. FL raised a bare "Index out of range" for most
+  calls, and `channel_route_to_mixer` silently routed to the last insert
+  instead.
+- When ComposeWithLLM doesn't answer, the piano-roll tools empty the request
+  queue. Queued edits used to run on the next unrelated script run.
+- `pattern_clear` no longer returns `cleared: false` after a successful clear.
+  FL 26.1.7 clears without asking for confirmation.
 - Pattern tools no longer treat `patterns.patternCount()` as the highest
   pattern index. It is 0 in a fresh project even though *Pattern 1* exists,
   so `pattern_set_length` and friends rejected valid patterns, and

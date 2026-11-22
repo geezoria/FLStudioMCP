@@ -6,8 +6,9 @@
   paths that contain spaces (`Documents/Image-Line/FL Studio/...`).
 - FL Studio must be **closed** before editing its registry values
   (`HKCU\Software\Image-Line\FL Studio <N>\Devices\...`). FL rewrites them on exit.
-- For live checks, use `python -m fl_studio_mcp doctor` and the bridge log
-  (`fLMCP_log.txt` in the bridge folder) rather than screenshots.
+- For live checks, use `python -m fl_studio_mcp doctor`,
+  `scripts/live_check.py --write` (about 10 s on a scratch project) and the
+  bridge log (`fLMCP_log.txt` in the bridge folder) rather than screenshots.
 - To load a changed bridge, run `install --command python --no-clients`, then
   restart FL instead of clicking *Update MIDI scripts*. Close it with
   `(Get-Process FL64).CloseMainWindow()` (no dialog on an unmodified project) and

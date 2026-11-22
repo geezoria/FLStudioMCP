@@ -9,7 +9,7 @@ welcome.
 | Path | What runs where |
 |---|---|
 | `fl_bridge/device_FLStudioMCP.py` | Runs **inside FL Studio** (sandboxed Python 3.12). Only `open()` file I/O, no threads, no sockets. |
-| `fl_bridge/piano_roll/ComposeWithLLM.pyscript` | Runs inside FL's piano roll when you trigger it (Ctrl+Alt+Y). |
+| `fl_bridge/piano_roll/ComposeWithLLM.pyscript` | Runs inside FL's piano roll. The server starts it from the piano roll's Tools menu. |
 | `src/fl_studio_mcp/` | The MCP server (normal Python ≥ 3.10) that your AI client starts. |
 | `src/fl_studio_mcp/tools/` | One module per toolset; each tool maps to one bridge action. |
 | `tests/` | Offline tests. The bridge is imported with `fl-studio-api-stubs`, so no FL is needed. |
@@ -27,6 +27,7 @@ ruff check . && pytest
 python -m fl_studio_mcp install --command python   # copy your working-tree bridge into FL and
                                                    # point your AI apps at this venv (re-run after edits)
 python -m fl_studio_mcp doctor                     # check that FL sees the bridge
+python scripts/live_check.py --write               # run every tool against FL (use a scratch project)
 ```
 
 After editing the FL-side script, reload it in FL (*Options → MIDI settings →
