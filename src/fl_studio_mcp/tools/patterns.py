@@ -55,9 +55,26 @@ def register(tools: ToolRegistrar) -> None:
         return get_client().call("patterns.delete", index=index)
 
     @tools.write("Set Pattern Length", idempotent=True)
-    def pattern_set_length(index: int, bars: float) -> dict[str, Any]:
-        """Request pattern length in bars. Currently, extend notes or the step grid to change length."""
-        return get_client().call("patterns.setLength", index=index, bars=bars)
+    def pattern_set_length(
+        index: int, bars: float | None = None, beats: int | None = None,
+    ) -> dict[str, Any]:
+        """Set a 1-based pattern's length in bars or beats (give one). FL Studio 2026+ only.
+
+        Bars are converted with the project's time signature. Older FL versions
+        return ok=false; there, extend notes or the step grid instead.
+        """
+        if (bars is None) == (beats is None):
+            raise ValueError("give exactly one of bars or beats")
+        params = {"index": index, "bars": bars} if beats is None else {"index": index, "beats": beats}
+        return get_client().call("patterns.setLength", **params)
+
+    @tools.write("Clear Pattern", destructive=True)
+    def pattern_clear(index: int) -> dict[str, Any]:
+        """Remove all notes and steps from a 1-based pattern, keeping the pattern. FL Studio 2026+.
+
+        Undo with project_undo.
+        """
+        return get_client().call("patterns.clear", index=index)
 
     @tools.read("Find Pattern by Name")
     def pattern_find_by_name(name: str) -> dict[str, Any]:

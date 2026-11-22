@@ -33,6 +33,12 @@ def register(tools: ToolRegistrar) -> None:
         """Display a transient hint message in FL Studio's status bar."""
         return get_client().call("ui.hint", message=message)
 
+    @tools.write("Open Plugin or Project Picker")
+    def ui_show_picker(mode: str = "plugin") -> dict[str, Any]:
+        """Open FL Studio 2026's picker panel: mode "plugin" (so the user can load an
+        instrument or effect, which scripts cannot do) or "project"."""
+        return get_client().call("ui.showPicker", mode=mode)
+
     @tools.write("Open Channel Piano Roll", idempotent=True)
     def ui_open_piano_roll_for_channel(channel: int, pattern: int | None = None) -> dict[str, Any]:
         """Open the piano roll for a given channel (optionally switch pattern first)."""
