@@ -23,20 +23,19 @@ Requirements on user side:
 
 from __future__ import annotations
 
-from typing import Literal
-
-from mcp.server.fastmcp import FastMCP
+from typing import Any, Literal
 
 from ..file_bridge import stage_and_run
+from ._meta import ToolRegistrar
 
 
 def _bars_to_quarters(bars: float) -> float:
     return bars * 4.0
 
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    def piano_roll_status() -> dict:
+def register(tools: ToolRegistrar) -> None:
+    @tools.read("Check Piano Roll Bridge")
+    def piano_roll_status() -> dict[str, Any]:
         """Report whether the file-based piano-roll bridge is installed/reachable.
 
         Use this to verify the pyscript is in place before issuing edits.
@@ -49,21 +48,19 @@ def register(mcp: FastMCP) -> None:
             "last_state": read_state(),
         }
 
-    @mcp.tool()
+    @tools.write("Add Piano Roll Notes", destructive=True)
     def piano_roll_add_notes(notes: list[dict],
                              clear_first: bool = False,
                              channel: int | None = None,
-                             pattern: int | None = None) -> dict:
+                             pattern: int | None = None) -> dict[str, Any]:
         """Add notes to a channel's piano roll (works WITHOUT MIDI).
 
         `notes`: list of {midi: int, time_bars: float, duration_bars: float,
-                          velocity: 0..1, pan?: -1..1}.
+                          velocity: 0..1, pan?: -1..1}. MIDI pitches are 0..127.
 
-        If `channel` is given and the TCP (MIDI) bridge is online, that channel's
-        piano roll is opened automatically. Otherwise, before calling, make sure:
-          1. In FL Studio, open the target channel's piano roll (double-click
-             the channel in the Channel Rack).
-          2. Pick `ComposeWithLLM` from the piano-roll scripts dropdown.
+        Set clear_first to replace notes. The controller bridge can try to open a
+        0-based channel and 1-based pattern. Verify the target piano roll is
+        focused in FL Studio with ComposeWithLLM selected before writing.
         """
         actions: list[dict] = []
         if clear_first:
@@ -80,14 +77,14 @@ def register(mcp: FastMCP) -> None:
         actions.append({"action": "add_notes", "notes": pyscript_notes})
         return stage_and_run(actions, channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Add Piano Roll Chord")
     def piano_roll_add_chord(midi_notes: list[int],
                              time_bars: float = 0.0,
                              duration_bars: float = 1.0,
                              velocity: float = 0.8,
                              channel: int | None = None,
-                             pattern: int | None = None) -> dict:
-        """Add a chord at a given bar position."""
+                             pattern: int | None = None) -> dict[str, Any]:
+        """Append simultaneous MIDI pitches at a zero-based time in bars, with a shared duration in bars and velocity from 0 to 1."""
         return stage_and_run([{
             "action": "add_chord",
             "time": _bars_to_quarters(time_bars),
@@ -95,7 +92,7 @@ def register(mcp: FastMCP) -> None:
             "notes": [{"midi": int(m), "velocity": velocity} for m in midi_notes],
         }], channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Add Piano Roll Arpeggio")
     def piano_roll_add_arpeggio(midi_notes: list[int],
                                 time_bars: float = 0.0,
                                 step_bars: float = 0.25,
@@ -104,8 +101,8 @@ def register(mcp: FastMCP) -> None:
                                 direction: Literal["up", "down", "updown", "random"] = "up",
                                 repeats: int = 1,
                                 channel: int | None = None,
-                                pattern: int | None = None) -> dict:
-        """Arpeggiate a chord into sequential notes."""
+                                pattern: int | None = None) -> dict[str, Any]:
+        """Append the given MIDI pitches in sequence. Start, spacing and note duration use bars of four quarter notes."""
         import random
         seq = list(midi_notes)
         if direction == "down":
@@ -127,69 +124,69 @@ def register(mcp: FastMCP) -> None:
         return stage_and_run([{"action": "add_notes", "notes": pyscript_notes}],
                              channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Delete Matching Piano Roll Notes", destructive=True, idempotent=True)
     def piano_roll_delete_notes(notes: list[dict],
                                 channel: int | None = None,
-                                pattern: int | None = None) -> dict:
-        """Delete notes by {midi, time_bars} match."""
+                                pattern: int | None = None) -> dict[str, Any]:
+        """Delete all notes matching a MIDI pitch and a start within 1/16 quarter note of time_bars."""
         converted = [{"midi": int(n["midi"]),
                       "time": _bars_to_quarters(float(n["time_bars"]))}
                      for n in notes]
         return stage_and_run([{"action": "delete_notes", "notes": converted}],
                              channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Clear Piano Roll", destructive=True, idempotent=True)
     def piano_roll_clear(channel: int | None = None,
-                         pattern: int | None = None) -> dict:
+                         pattern: int | None = None) -> dict[str, Any]:
         """Remove every note in the (channel's) piano roll."""
         return stage_and_run([{"action": "clear"}], channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.read("Read Piano Roll Notes")
     def piano_roll_read(channel: int | None = None,
-                        pattern: int | None = None) -> dict:
-        """Read back the current piano-roll state (returns all notes)."""
+                        pattern: int | None = None) -> dict[str, Any]:
+        """Export piano-roll state with note count, pitches, timing in bars and quarters, and velocity."""
         return stage_and_run([{"action": "export_only"}], wait_sec=5.0,
                              channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Quantize Piano Roll Notes", destructive=True)
     def piano_roll_quantize(grid_bars: float = 0.25,
                             strength: float = 1.0,
                             channel: int | None = None,
-                            pattern: int | None = None) -> dict:
-        """Snap existing notes to a grid."""
+                            pattern: int | None = None) -> dict[str, Any]:
+        """Move note starts toward a grid spaced in bars. Strength 0 leaves notes unchanged and 1 snaps fully."""
         return stage_and_run([{
             "action": "quantize",
             "grid": _bars_to_quarters(grid_bars),
             "strength": strength,
         }], channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Transpose Piano Roll Notes", destructive=True)
     def piano_roll_transpose(semitones: int,
                              channel: int | None = None,
-                             pattern: int | None = None) -> dict:
+                             pattern: int | None = None) -> dict[str, Any]:
         """Shift every note by N semitones."""
         return stage_and_run([{"action": "transpose", "semitones": int(semitones)}],
                              channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Humanize Piano Roll Notes", destructive=True)
     def piano_roll_humanize(timing_jitter_bars: float = 0.02,
                             velocity_jitter: float = 0.1,
                             channel: int | None = None,
-                            pattern: int | None = None) -> dict:
-        """Add subtle timing+velocity randomisation."""
+                            pattern: int | None = None) -> dict[str, Any]:
+        """Randomize note starts by timing_jitter_bars and normalized velocities by velocity_jitter."""
         return stage_and_run([{
             "action": "humanize",
             "timing_jitter": _bars_to_quarters(timing_jitter_bars),
             "velocity_jitter": velocity_jitter,
         }], channel=channel, pattern=pattern)
 
-    @mcp.tool()
+    @tools.write("Duplicate Piano Roll Notes")
     def piano_roll_duplicate(source_time_bars: float,
                              length_bars: float,
                              dest_time_bars: float,
                              channel: int | None = None,
-                             pattern: int | None = None) -> dict:
-        """Copy a time-range of notes to another location."""
+                             pattern: int | None = None) -> dict[str, Any]:
+        """Append a copy of notes starting inside the source range. Source, length and destination are in bars."""
         return stage_and_run([{
             "action": "duplicate",
             "source_time": _bars_to_quarters(source_time_bars),
