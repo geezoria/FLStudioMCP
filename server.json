@@ -1,0 +1,47 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.geezoria/flmcp",
+  "title": "fLMCP — FL Studio",
+  "description": "Control FL Studio 2024–2026: transport, mixer, channels, plugins, piano roll, generators.",
+  "repository": {
+    "url": "https://github.com/geezoria/FLStudioMCP",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/geezoria/FLStudioMCP",
+  "version": "0.4.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "flmcp",
+      "version": "0.4.0",
+      "runtimeHint": "uvx",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "FLMCP_TOOLSETS",
+          "description": "Comma-separated tool groups or presets (all, core, lean, transport, mixer, piano_roll, ...). Default: all.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "FLMCP_DISABLE_TOOLS",
+          "description": "Comma-separated tool names to hide.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "FLMCP_BRIDGE_DIR",
+          "description": "Folder of the FL controller script if auto-detection fails.",
+          "isRequired": false,
+          "format": "filepath"
+        },
+        {
+          "name": "FLMCP_TIMEOUT",
+          "description": "Seconds to wait for FL Studio per call. Default: 10.",
+          "isRequired": false,
+          "format": "number"
+        }
+      ]
+    }
+  ]
+}

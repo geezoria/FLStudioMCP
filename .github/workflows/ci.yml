@@ -41,6 +41,9 @@ jobs:
         run: python -m py_compile fl_bridge/device_FLStudioMCP.py
       - name: Tests
         run: python -m pytest -q
+      - name: docs/TOOLS.md is in sync with the tool registry
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: python scripts/gen_tools_doc.py --check
 
   build:
     runs-on: ubuntu-latest
