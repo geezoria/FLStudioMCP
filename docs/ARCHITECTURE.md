@@ -91,18 +91,27 @@ runs, the client sends wakes every 20 ms.
 
 ## Piano-roll path
 
-`flpianoroll` is importable only inside piano-roll scripts, and those run only
-when the user (or a hotkey) triggers them:
+`flpianoroll` is importable only inside piano-roll scripts, FL's API can't run
+one, and "Run last script again" (`Ctrl+Alt+Y`) knows nothing about scripts
+run in an earlier session:
 
 1. A `piano_roll_*` or `gen_emit_*` tool writes `fLMCP_request.json` into
    `Settings/Piano roll scripts/`.
-2. `keystroke.py` focuses FL and sends `Ctrl+Alt+Y` (FL's "run last piano-roll
-   script") via Win32 `SendInput`.
+2. `fl_windows.run_piano_roll_script` posts a click on the Tools icon of the
+   open piano roll's caption bar, then posts Up × *n* and Enter to the popup
+   menu. The menu follows the real cursor, so posted mouse coordinates don't
+   pick items, but posted keys do. Up from no selection wraps to the last item,
+   and the Scripts column ends with FL's and the user's `.pyscript` files in
+   name order, so *n* is the script's position from the end. Nothing takes the
+   focus, the mouse or the keyboard. If that fails, `keystroke.py` focuses FL
+   and sends `Ctrl+Alt+Y` via `SendInput`.
 3. `ComposeWithLLM.pyscript` reads the request, adds / deletes / edits notes
    and writes the full note list to `fLMCP_state.json`, which the tool returns.
 
-The user has to select **ComposeWithLLM** in a piano roll once so the hotkey
-targets it. On non-Windows platforms step 2 is manual.
+If the server triggered the script and no state came back within the wait,
+`stage_and_run` empties the queue, so stale edits can't run on a later script
+run. On non-Windows platforms step 2 is manual, and the queue is kept until
+the user runs the script.
 
 ## Server internals
 

@@ -118,3 +118,30 @@ def test_transport_record_reports_open_prompt(monkeypatch):
 
     monkeypatch.setattr(transport, "_dialogs_soon", lambda wait=0.5: [])
     assert registrar.tools["transport_record"]() == {"ok": True}
+
+
+def test_script_steps_count_from_the_end_of_the_merged_sorted_list():
+    names = ["Arpeggiator", "Euclidean", "Humanize", "Note repeater sprinkler",
+             "Select by velocity and more", "ComposeWithLLM"]
+    assert fl_windows.script_steps_from_end("ComposeWithLLM", names) == 5
+    assert fl_windows.script_steps_from_end("Select by velocity and more", names) == 1
+    assert fl_windows.script_steps_from_end("arpeggiator", names) == 6
+    # The same script in FL's and the user's folder is listed once.
+    assert fl_windows.script_steps_from_end("ComposeWithLLM", names + ["ComposeWithLLM"]) == 5
+    assert fl_windows.script_steps_from_end("Missing", names) is None
+
+
+def test_piano_roll_scripts_lists_pyscripts_of_existing_folders(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "One.pyscript").write_text("")
+    (tmp_path / "a" / "notes.txt").write_text("")
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "Two.pyscript").write_text("")
+    found = fl_windows.piano_roll_scripts(tmp_path / "a", tmp_path / "b", tmp_path / "missing")
+    assert sorted(found) == ["One", "Two"]
+
+
+def test_run_piano_roll_script_is_a_no_op_off_windows(monkeypatch):
+    monkeypatch.setattr(fl_windows, "_user32", lambda: None)
+    assert fl_windows.run_piano_roll_script("ComposeWithLLM", ".") == {
+        "ok": False, "reason": "only available on Windows"}

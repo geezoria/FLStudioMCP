@@ -29,8 +29,9 @@ the error response to fall back gracefully.
   (26.1 / 26.1.3) or newer**, via `patterns.setPatternLength` /
   `patterns.clearPattern`. Older FL returns `ok: false` with a hint; there,
   length still follows the notes / step grid.
-- ⚠️ `pattern_clear` makes FL show a **Confirm dialog**. FL (and the bridge) wait
-  until the user answers it; the tool then reports `pending_confirmation`.
+- ⚠️ `pattern_clear` cleared notes and steps at once on FL 26.1.7. An earlier
+  check saw FL show a **Confirm dialog** first. FL (and the bridge) then wait
+  until the user answers it, and the tool reports `pending_confirmation`.
 - ✅ `pattern_clone` into a chosen pattern (`dest_index`) — FL 2026.1.1+.
 
 ### Channels
@@ -96,14 +97,19 @@ the error response to fall back gracefully.
 
 ### Piano roll
 - ✅ add / delete / clear / read / quantize / transpose / humanize /
-  duplicate — all via `flpianoroll.score`.
-- ⚠️ Requires FL Studio to be the foreground window so `SendInput(Ctrl+Alt+Y)`
-  lands. Bridge does best-effort `SetForegroundWindow`. If focus fails, tool
-  response has `hotkey_sent: False` — ask user to press Ctrl+Alt+Y manually.
-- ⚠️ Requires the **`ComposeWithLLM` pyscript to be the currently selected
-  piano-roll script**. When FL first loads, open any pattern's piano roll,
-  click the *scripts* dropdown (top-right of the piano roll), and pick
-  `ComposeWithLLM` once. FL remembers the choice across sessions.
+  duplicate — all via `flpianoroll.score` (verified live on FL 26.1.7).
+- ✅ On Windows the server runs `ComposeWithLLM` from the piano roll's *Tools*
+  menu with posted window messages: no setup, no focus change, and it doesn't
+  touch the mouse or keyboard. A piano roll must be visible; tools given a
+  `channel` open it. The result's `trigger` says `tools_menu`, or `hotkey` when
+  it fell back to `Ctrl+Alt+Y`.
+- ⚠️ The menu position is computed from the `.pyscript` files in FL's and your
+  *Piano roll scripts* folders. Scripts kept in subfolders aren't counted; if
+  FL lists them in the menu, the server can pick the wrong script.
+- ⚠️ If the script doesn't answer within the wait, nothing changes and the
+  queue is emptied (`ok: false` with a `note`), so retrying is safe.
+- ⚠️ macOS: the server can't run the script. Edits stay queued until you run
+  *Tools → Scripts → ComposeWithLLM* (or `Cmd+Opt+Y` after the first run).
 
 ### Transport constants
 The bridge gracefully degrades if specific `midi.FPT_*` / `midi.REC_*`
@@ -164,8 +170,8 @@ script's `OnIdle`, so without the wake port the bridge never sees commands.
 Older FL versions that call `OnIdle` answer without it, at FL's idle rate.
 
 ### Modal dialogs
-Some FL functions open a modal dialog (e.g. `pattern_clear` asks for
-confirmation). While it is open FL's UI thread, and with it the bridge, waits.
+Some FL functions open a modal dialog (arming Record asks what to record, and
+`pattern_clear` has been seen to ask for confirmation). While it is open FL's UI thread, and with it the bridge, waits.
 Calls time out until the user answers it in FL.
 
 ### Automation recording follows FL's recording filter
